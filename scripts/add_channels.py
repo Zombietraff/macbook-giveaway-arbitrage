@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.database import close_db, get_db, init_db
-from db.models import add_channel, get_all_channels
+from db.models import add_channel, get_all_channels, update_channel
 
 
 async def list_channels() -> None:
@@ -50,6 +50,12 @@ async def remove_channel(channel_id: str) -> None:
     await db.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
     await db.commit()
     print(f"✅ Канал {channel_id} удалён.")
+
+
+async def edit_channel(channel_id: str, title: str, invite_link: str) -> None:
+    """Обновить канал в БД."""
+    await update_channel(channel_id, title, invite_link)
+    print(f"✅ Канал {channel_id} ('{title}') успешно обновлён!")
 
 
 async def add_channel_interactive() -> None:
@@ -81,10 +87,11 @@ async def add_channel_interactive() -> None:
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Управление каналами для подписки")
     parser.add_argument("--list", action="store_true", help="Показать все каналы")
-    parser.add_argument("--id", type=str, help="Channel ID для добавления")
+    parser.add_argument("--id", type=str, help="Channel ID для добавления/обновления")
     parser.add_argument("--title", type=str, help="Название канала")
     parser.add_argument("--link", type=str, help="Ссылка на канал")
     parser.add_argument("--remove", type=str, help="Channel ID для удаления")
+    parser.add_argument("--update", action="store_true", help="Обновить существующий канал вместо добавления")
 
     args = parser.parse_args()
 
@@ -96,8 +103,11 @@ async def main() -> None:
         elif args.remove:
             await remove_channel(args.remove)
         elif args.id and args.title and args.link:
-            await add_channel(args.id, args.title, args.link)
-            print(f"✅ Канал '{args.title}' добавлен!")
+            if args.update:
+                await edit_channel(args.id, args.title, args.link)
+            else:
+                await add_channel(args.id, args.title, args.link)
+                print(f"✅ Канал '{args.title}' добавлен!")
         else:
             # Интерактивный режим
             await list_channels()

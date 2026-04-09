@@ -134,6 +134,16 @@ async def add_channel(channel_id: str, title: str, invite_link: str) -> None:
     await db.commit()
 
 
+async def update_channel(channel_id: str, title: str, invite_link: str) -> None:
+    """Обновить данные канала (название и ссылку)."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE channels SET title = ?, invite_link = ? WHERE channel_id = ?",
+        (title, invite_link, channel_id),
+    )
+    await db.commit()
+
+
 # ════════════════════════════════════════════════════════════
 #  PROMOCODES
 # ════════════════════════════════════════════════════════════
