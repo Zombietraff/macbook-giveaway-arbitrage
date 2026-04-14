@@ -1,15 +1,46 @@
 """
-Вспомогательные функции для расчёта суток в часовом поясе Europe/Kiev.
+Вспомогательные функции для расчёта суток в часовом поясе Europe/Kyiv.
+
+Если на хосте отсутствует tzdata или конкретный алиас таймзоны,
+используется безопасный fallback UTC+3, чтобы приложение не падало на импорте.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+import logging
+from datetime import UTC, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from config import TIMEZONE
 
-_KYIV_TZ = ZoneInfo(TIMEZONE)
+logger = logging.getLogger(__name__)
+
+
+def _resolve_kyiv_tz() -> timezone | ZoneInfo:
+    """Выбрать рабочую таймзону Kyiv/Kiev с fallback без падения процесса."""
+    candidates = [TIMEZONE]
+
+    # Поддерживаем оба ключа (исторический и канонический).
+    if TIMEZONE != "Europe/Kyiv":
+        candidates.append("Europe/Kyiv")
+    if TIMEZONE != "Europe/Kiev":
+        candidates.append("Europe/Kiev")
+
+    for key in candidates:
+        try:
+            return ZoneInfo(key)
+        except ZoneInfoNotFoundError:
+            continue
+
+    logger.warning(
+        "Не удалось загрузить таймзону (%s). Используем fallback UTC+3. "
+        "Установите пакет 'tzdata' или системную базу таймзон.",
+        ", ".join(candidates),
+    )
+    return timezone(timedelta(hours=3))
+
+
+_KYIV_TZ = _resolve_kyiv_tz()
 
 
 def get_kyiv_day_bounds_utc(now: datetime | None = None) -> tuple[datetime, datetime]:

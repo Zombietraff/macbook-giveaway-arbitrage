@@ -7,17 +7,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
 
 from aiogram import Bot, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNotFound
 from aiogram.filters import Command
 from aiogram.types import Message
 
 import config
 from db.database import get_db
-from db.models import clear_winners, get_casino_stats, get_end_date, set_end_date
+from db.models import clear_winners, get_casino_stats, get_end_date, set_end_date, set_user_blocked
+from keyboards.main_menu import get_main_menu_keyboard
 from utils.timezone import get_kyiv_day_bounds_utc
 
 logger = logging.getLogger(__name__)
@@ -165,6 +168,62 @@ async def casino_stats(message: Message, **kwargs: Any) -> None:
 
     await message.answer(text)
     _log_admin_action(message.from_user.id, "casino_stats")
+
+
+@router.message(Command("refresh_menu"))
+async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
+    """Принудительно обновить reply-меню у всех пользователей."""
+    if not _is_admin(message.from_user.id):
+        return
+
+    db = await get_db()
+    async with db.execute("SELECT id, language_code FROM users") as cursor:
+        users = await cursor.fetchall()
+
+    total = len(users)
+    await message.answer(f"🔄 Обновляю меню у пользователей: <b>{total}</b>")
+
+    sent = 0
+    failed = 0
+    blocked = 0
+
+    for idx, user in enumerate(users, 1):
+        user_id = int(user["id"])
+        lang = user["language_code"] or "ru"
+
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text="📱",
+                reply_markup=get_main_menu_keyboard(lang),
+                disable_notification=True,
+            )
+            sent += 1
+        except TelegramForbiddenError:
+            blocked += 1
+            failed += 1
+            await set_user_blocked(user_id, blocked=True)
+        except (TelegramBadRequest, TelegramNotFound):
+            failed += 1
+        except Exception as exc:
+            failed += 1
+            logger.warning("refresh_menu: user=%d send failed: %s", user_id, exc)
+
+        # Бережём лимиты Telegram API.
+        if idx % 25 == 0:
+            await asyncio.sleep(1)
+
+    await message.answer(
+        "✅ Обновление меню завершено.\n"
+        f"Отправлено: <b>{sent}</b>\n"
+        f"Ошибок: <b>{failed}</b>\n"
+        f"Заблокировали бота: <b>{blocked}</b>"
+    )
+
+    _log_admin_action(
+        message.from_user.id,
+        f"refresh_menu: total={total}, sent={sent}, failed={failed}, blocked={blocked}",
+    )
 
 
 @router.message(Command("draw"))

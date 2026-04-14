@@ -50,7 +50,9 @@ BLACKLIST_LANG: Final[frozenset[str]] = frozenset({
 })
 
 # ──────────────────── Часовой пояс ────────────────────
-TIMEZONE: Final[str] = "Europe/Kiev"
+# По умолчанию используем канонический IANA-ключ Europe/Kyiv.
+# Можно переопределить через переменную окружения TIMEZONE.
+TIMEZONE: Final[str] = os.getenv("TIMEZONE", "Europe/Kyiv")
 
 # ──────────────────── Казино ────────────────────
 CASINO_MAX_BET: Final[int] = 5

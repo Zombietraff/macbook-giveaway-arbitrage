@@ -30,7 +30,7 @@ _ALLOWED_AFTER_END = frozenset({
 
 # Админ-команды, всегда разрешены (даже после окончания)
 _ADMIN_COMMANDS = frozenset({
-    "/draw", "/admin_stats", "/set_date", "/start",
+    "/draw", "/admin_stats", "/casino_stats", "/refresh_menu", "/set_date", "/start",
 })
 
 
