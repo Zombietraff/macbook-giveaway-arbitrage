@@ -24,6 +24,7 @@ from middlewares.localization import LocalizationMiddleware
 # ──────────────────── Импорт роутеров ────────────────────
 from handlers import (
     admin,
+    casino,
     check,
     info,
     language,
@@ -55,12 +56,13 @@ def _register_routers(dp: Dispatcher) -> None:
         check.router,
         referral.router,
         promocode.router,
+        casino.router,
         profile.router,
         info.router,
         language.router,
         winners.router,
     )
-    logger.info("Зарегистрировано %d роутеров.", 9)
+    logger.info("Зарегистрировано %d роутеров.", 10)
 
 
 async def on_startup(bot: Bot) -> None:

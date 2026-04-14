@@ -20,18 +20,63 @@ from db.database import close_db, init_db
 from db.models import add_promocode
 
 # 10 уникальных промокодов-пасхалок
+# PROMOCODES = [
+#     "MACBOOK2026",
+#     "AIRPODS_PRO",
+#     "LUCKY_WINNER",
+#     "HIDDEN_TREASURE",
+#     "GOLDEN_TICKET",
+#     "SECRET_CODE",
+#     "EASTER_EGG_1",
+#     "BONUS_LEVEL",
+#     "MEGA_PRIZE",
+#     "TOP_SECRET",
+# ]
+
+
+
 PROMOCODES = [
-    "MACBOOK2026",
-    "AIRPODS_PRO",
-    "LUCKY_WINNER",
-    "HIDDEN_TREASURE",
-    "GOLDEN_TICKET",
-    "SECRET_CODE",
-    "EASTER_EGG_1",
-    "BONUS_LEVEL",
-    "MEGA_PRIZE",
-    "TOP_SECRET",
+    "Владыка",
+    "ДжекиЧАН",
+    "+500",
+    
+    "ChillGuy",
+    "1+1=10",
+    "Лебовски2.0",
+    
+    "Bear",
+    "СОЛОАНДРЕЙ",
+    "ХАВДУЮДУ",
+    
+    "НАХАРАКТЕРЕ",
+    "20НА80",
+    "NutraFree",
+    
+    "БЕНЯ",
+    "ТРАКТОРИСТ",
+    "Rhyno",
+    
+    "ФЕЙСБУКОВИЧИ",
+    "АНДРОМЕДА",
+    "РОИ20",
+    
+    "НЕСЛИВАЮВТЕСТ",
+    "ФИКС+ПРОЦЕНТ",
+    "БЫСТРООБУЧАЮСЬ",
+    
+    "ЮТУБЖИВ",
+    "МАНКИДЖОБ",
+    "ФАНАТСВИПОВ",
+    
+    "НАДОКРАСТЬ",
+    "NINJA007",
+    "SHADOW",
+    
+    "ЗОМБАРЬ",
+    "МЕНТАЛКА",
+    "АРБИТРАН",
 ]
+
 
 
 async def main() -> None:

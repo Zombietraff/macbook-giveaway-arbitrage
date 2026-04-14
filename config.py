@@ -51,3 +51,8 @@ BLACKLIST_LANG: Final[frozenset[str]] = frozenset({
 
 # ──────────────────── Часовой пояс ────────────────────
 TIMEZONE: Final[str] = "Europe/Kiev"
+
+# ──────────────────── Казино ────────────────────
+CASINO_MAX_BET: Final[int] = 5
+CASINO_MIN_BALANCE: Final[int] = 2
+CASINO_DAILY_LIMIT: Final[int] = 5

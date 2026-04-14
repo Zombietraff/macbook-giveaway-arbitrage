@@ -25,9 +25,13 @@ def get_main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
     - Пригласить друга | Нашёл пасхалку
     - Как это работает? | Профиль
     - Язык | Победители
+    - Запустить кампанию
     """
     return ReplyKeyboardMarkup(
         keyboard=[
+            [
+                KeyboardButton(text=get_text("menu_casino", lang)),
+            ],
             [
                 KeyboardButton(text=get_text("menu_invite", lang)),
                 KeyboardButton(text=get_text("menu_promo", lang)),

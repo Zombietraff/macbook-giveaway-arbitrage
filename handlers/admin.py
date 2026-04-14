@@ -17,7 +17,8 @@ from aiogram.types import Message
 
 import config
 from db.database import get_db
-from db.models import get_end_date, set_end_date, clear_winners
+from db.models import clear_winners, get_casino_stats, get_end_date, set_end_date
+from utils.timezone import get_kyiv_day_bounds_utc
 
 logger = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -38,6 +39,13 @@ def _log_admin_action(admin_id: int, action: str) -> None:
     with open(_ADMIN_LOG, "a", encoding="utf-8") as f:
         f.write(line)
     logger.info("Admin action: %s (by %d)", action, admin_id)
+
+
+def _fmt_amount(value: float) -> str:
+    """Форматировать число без лишних нулей после запятой."""
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
 @router.message(Command("admin_stats"))
@@ -118,6 +126,45 @@ async def set_date(message: Message, **kwargs: Any) -> None:
         message.from_user.id,
         f"set_date: {old_date_str} → {new_date}",
     )
+
+
+@router.message(Command("casino_stats"))
+async def casino_stats(message: Message, **kwargs: Any) -> None:
+    """Показать статистику модуля казино (только для админов)."""
+    if not _is_admin(message.from_user.id):
+        return
+
+    day_start_utc, day_end_utc = get_kyiv_day_bounds_utc()
+    stats = await get_casino_stats(day_start_utc, day_end_utc)
+
+    top_players = stats["top_players"]
+    if top_players:
+        top_lines = [
+            f"{idx}. {player['display_name']} — <b>{player['spins']}</b>"
+            for idx, player in enumerate(top_players, 1)
+        ]
+        top_text = "\n".join(top_lines)
+    else:
+        top_text = "—"
+
+    text = (
+        "🎰 <b>Casino stats</b>\n\n"
+        f"🗓 Спинов сегодня: <b>{stats['today_spins']}</b>\n"
+        f"📦 Спинов всего: <b>{stats['total_spins']}</b>\n\n"
+        f"💵 Ставок сегодня: <b>{_fmt_amount(stats['today_bets'])}</b>\n"
+        f"💸 Выплат сегодня: <b>{_fmt_amount(stats['today_payouts'])}</b>\n"
+        f"💰 Ставок всего: <b>{_fmt_amount(stats['total_bets'])}</b>\n"
+        f"🏧 Выплат всего: <b>{_fmt_amount(stats['total_payouts'])}</b>\n"
+        f"📈 House profit: <b>{_fmt_amount(stats['house_profit'])}</b>\n"
+        f"🎯 Winrate: <b>{stats['win_rate']:.2f}%</b>\n\n"
+        f"🔴 Loss: <b>{stats['breakdown']['loss']}</b>\n"
+        f"🟢 Win: <b>{stats['breakdown']['win']}</b>\n"
+        f"🎰 Jackpot: <b>{stats['breakdown']['jackpot']}</b>\n\n"
+        f"🏆 Топ-3 игроков по спинам:\n{top_text}"
+    )
+
+    await message.answer(text)
+    _log_admin_action(message.from_user.id, "casino_stats")
 
 
 @router.message(Command("draw"))

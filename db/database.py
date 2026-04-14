@@ -83,6 +83,34 @@ CREATE TABLE IF NOT EXISTS settings (
     key       TEXT PRIMARY KEY,
     value     TEXT
 );
+
+-- casino_spins: история спинов в модуле "Казик"
+CREATE TABLE IF NOT EXISTS casino_spins (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER NOT NULL,
+    bet_amount     REAL NOT NULL,
+    dice_value     INTEGER NOT NULL,
+    result_type    TEXT CHECK(result_type IN ('loss', 'win', 'jackpot')),
+    multiplier     REAL NOT NULL,
+    balance_before REAL NOT NULL,
+    balance_after  REAL NOT NULL,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_casino_daily ON casino_spins(user_id, created_at);
+
+-- user_flags: служебные пользовательские флаги (например, дисклеймер казино)
+CREATE TABLE IF NOT EXISTS user_flags (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    flag       TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, flag),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_flags_lookup ON user_flags(user_id, flag);
 """
 
 

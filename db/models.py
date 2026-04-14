@@ -13,6 +13,7 @@ from typing import Any, Optional
 import aiosqlite
 
 from db.database import get_db
+from utils.timezone import to_sqlite_utc
 
 logger = logging.getLogger(__name__)
 
@@ -287,3 +288,248 @@ async def set_end_date(new_date: datetime) -> None:
         (date_str,)
     )
     await db.commit()
+
+
+# ════════════════════════════════════════════════════════════
+#  CASINO
+# ════════════════════════════════════════════════════════════
+
+_CASINO_RESULTS = frozenset({"loss", "win", "jackpot"})
+
+
+async def has_user_flag(user_id: int, flag: str) -> bool:
+    """Проверить, установлен ли у пользователя служебный флаг."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT 1 FROM user_flags WHERE user_id = ? AND flag = ? LIMIT 1",
+        (user_id, flag),
+    ) as cursor:
+        return (await cursor.fetchone()) is not None
+
+
+async def set_user_flag(user_id: int, flag: str) -> None:
+    """Установить служебный флаг пользователя (идемпотентно)."""
+    db = await get_db()
+    await db.execute(
+        "INSERT OR IGNORE INTO user_flags (user_id, flag) VALUES (?, ?)",
+        (user_id, flag),
+    )
+    await db.commit()
+
+
+async def get_user_casino_daily_spins(
+    user_id: int,
+    day_start_utc: datetime,
+    day_end_utc: datetime,
+) -> int:
+    """
+    Подсчитать число спинов пользователя в пределах суток [start, end) UTC.
+    """
+    db = await get_db()
+    async with db.execute(
+        """
+        SELECT COUNT(*)
+        FROM casino_spins
+        WHERE user_id = ?
+          AND created_at >= ?
+          AND created_at < ?
+        """,
+        (user_id, to_sqlite_utc(day_start_utc), to_sqlite_utc(day_end_utc)),
+    ) as cursor:
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
+async def play_casino_spin_atomic(
+    user_id: int,
+    bet_amount: float,
+    dice_value: int,
+    result_type: str,
+    multiplier: float,
+) -> dict[str, float | int | str]:
+    """
+    Выполнить атомарный спин казино и обновить баланс пользователя.
+
+    Транзакция выполняется строго через BEGIN IMMEDIATE.
+    """
+    if result_type not in _CASINO_RESULTS:
+        raise ValueError("invalid_result_type")
+    if bet_amount <= 0:
+        raise ValueError("invalid_bet_amount")
+    if dice_value < 1 or dice_value > 64:
+        raise ValueError("invalid_dice_value")
+
+    db = await get_db()
+    await db.execute("BEGIN IMMEDIATE")
+
+    try:
+        async with db.execute(
+            "SELECT tickets FROM users WHERE id = ?",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if row is None:
+            raise ValueError("user_not_found")
+
+        balance_before = float(row["tickets"] or 0.0)
+
+        # Гарантируем, что после выбора ставки у пользователя остаётся >= 1 билет.
+        if balance_before < bet_amount or (balance_before - bet_amount) < 1.0:
+            raise ValueError("insufficient_balance")
+
+        payout_amount = bet_amount * multiplier
+        balance_after = balance_before - bet_amount + payout_amount
+
+        await db.execute(
+            "UPDATE users SET tickets = ? WHERE id = ?",
+            (balance_after, user_id),
+        )
+
+        await db.execute(
+            """
+            INSERT INTO casino_spins (
+                user_id,
+                bet_amount,
+                dice_value,
+                result_type,
+                multiplier,
+                balance_before,
+                balance_after
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                bet_amount,
+                dice_value,
+                result_type,
+                multiplier,
+                balance_before,
+                balance_after,
+            ),
+        )
+
+        await db.commit()
+        return {
+            "user_id": user_id,
+            "bet_amount": bet_amount,
+            "dice_value": dice_value,
+            "result_type": result_type,
+            "multiplier": multiplier,
+            "balance_before": balance_before,
+            "balance_after": balance_after,
+            "payout_amount": payout_amount,
+            "net_profit": payout_amount - bet_amount,
+        }
+
+    except Exception:
+        await db.rollback()
+        raise
+
+
+async def get_casino_stats(
+    day_start_utc: datetime,
+    day_end_utc: datetime,
+) -> dict[str, Any]:
+    """Собрать статистику казино для админ-команды /casino_stats."""
+    db = await get_db()
+
+    start_sql = to_sqlite_utc(day_start_utc)
+    end_sql = to_sqlite_utc(day_end_utc)
+
+    async with db.execute("SELECT COUNT(*) FROM casino_spins") as cursor:
+        total_spins = int((await cursor.fetchone())[0] or 0)
+
+    async with db.execute(
+        """
+        SELECT COUNT(*)
+        FROM casino_spins
+        WHERE created_at >= ? AND created_at < ?
+        """,
+        (start_sql, end_sql),
+    ) as cursor:
+        today_spins = int((await cursor.fetchone())[0] or 0)
+
+    async with db.execute(
+        """
+        SELECT
+            COALESCE(SUM(bet_amount), 0),
+            COALESCE(SUM(bet_amount * multiplier), 0)
+        FROM casino_spins
+        """
+    ) as cursor:
+        total_bets, total_payouts = await cursor.fetchone()
+
+    async with db.execute(
+        """
+        SELECT
+            COALESCE(SUM(bet_amount), 0),
+            COALESCE(SUM(bet_amount * multiplier), 0)
+        FROM casino_spins
+        WHERE created_at >= ? AND created_at < ?
+        """,
+        (start_sql, end_sql),
+    ) as cursor:
+        today_bets, today_payouts = await cursor.fetchone()
+
+    result_breakdown = {"loss": 0, "win": 0, "jackpot": 0}
+    async with db.execute(
+        "SELECT result_type, COUNT(*) AS cnt FROM casino_spins GROUP BY result_type"
+    ) as cursor:
+        rows = await cursor.fetchall()
+        for row in rows:
+            result_type = row["result_type"]
+            if result_type in result_breakdown:
+                result_breakdown[result_type] = int(row["cnt"])
+
+    async with db.execute(
+        """
+        SELECT
+            cs.user_id,
+            u.username,
+            u.first_name,
+            COUNT(*) AS spins
+        FROM casino_spins cs
+        LEFT JOIN users u ON u.id = cs.user_id
+        GROUP BY cs.user_id
+        ORDER BY spins DESC, cs.user_id ASC
+        LIMIT 3
+        """
+    ) as cursor:
+        top_rows = await cursor.fetchall()
+
+    top_players: list[dict[str, Any]] = []
+    for row in top_rows:
+        display_name = row["first_name"] or str(row["user_id"])
+        if row["username"]:
+            display_name = f"@{row['username']}"
+
+        top_players.append(
+            {
+                "user_id": row["user_id"],
+                "display_name": display_name,
+                "spins": int(row["spins"]),
+            }
+        )
+
+    win_spins = result_breakdown["win"] + result_breakdown["jackpot"]
+    win_rate = (win_spins / total_spins * 100.0) if total_spins else 0.0
+
+    total_bets_f = float(total_bets or 0.0)
+    total_payouts_f = float(total_payouts or 0.0)
+    today_bets_f = float(today_bets or 0.0)
+    today_payouts_f = float(today_payouts or 0.0)
+
+    return {
+        "today_spins": today_spins,
+        "total_spins": total_spins,
+        "today_bets": today_bets_f,
+        "today_payouts": today_payouts_f,
+        "total_bets": total_bets_f,
+        "total_payouts": total_payouts_f,
+        "house_profit": total_bets_f - total_payouts_f,
+        "win_rate": win_rate,
+        "breakdown": result_breakdown,
+        "top_players": top_players,
+    }
