@@ -52,16 +52,16 @@
     "@react-three/fiber": "^9.2.0",
     "@twa-dev/sdk": "^8.0.2",
     "r3f-perf": "^7.2.3",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
     "three": "^0.178.0",
     "three-stdlib": "^2.36.1",
     "zustand": "^5.0.6"
   },
   "devDependencies": {
     "@types/node": "^24.0.12",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
     "@types/three": "^0.178.0",
     "@typescript-eslint/eslint-plugin": "^8.35.1",
     "@typescript-eslint/parser": "^8.35.1",
@@ -73,5 +73,9 @@
     "pinst": "^3.0.0",
     "typescript": "^5.8.3",
     "vite": "^7.0.2"
+  },
+  "overrides": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
   }
 }
