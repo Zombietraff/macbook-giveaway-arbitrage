@@ -112,6 +112,19 @@ CREATE TABLE IF NOT EXISTS user_flags (
 
 CREATE INDEX IF NOT EXISTS idx_user_flags_lookup ON user_flags(user_id, flag);
 
+-- user_trust_scores: скрытый trust multiplier для draw
+CREATE TABLE IF NOT EXISTS user_trust_scores (
+    user_id           INTEGER PRIMARY KEY,
+    common_chat_count INTEGER NOT NULL DEFAULT 0,
+    draw_multiplier   REAL    NOT NULL DEFAULT 1.0,
+    status            TEXT    NOT NULL CHECK(status IN ('boosted','plain','unresolvable','error','disabled')),
+    checked_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    error             TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_trust_scores_status ON user_trust_scores(status);
+
 -- temporary_admins: временные админы арендаторов/конкурсов
 CREATE TABLE IF NOT EXISTS temporary_admins (
     user_id    INTEGER PRIMARY KEY,
@@ -148,6 +161,7 @@ CREATE TABLE IF NOT EXISTS contest_reset_runs (
     casino_spins_count         INTEGER NOT NULL DEFAULT 0,
     channels_count             INTEGER NOT NULL DEFAULT 0,
     promocodes_count           INTEGER NOT NULL DEFAULT 0,
+    trust_scores_count         INTEGER NOT NULL DEFAULT 0,
     active_temp_admins_count   INTEGER NOT NULL DEFAULT 0,
     temp_admins_count          INTEGER NOT NULL DEFAULT 0
 );
@@ -173,6 +187,20 @@ CREATE TABLE IF NOT EXISTS contest_reset_user_tickets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_contest_reset_user_tickets_reset ON contest_reset_user_tickets(reset_id);
+
+-- contest_reset_user_trust_scores: архив user_trust_scores перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_user_trust_scores (
+    reset_id          INTEGER NOT NULL,
+    user_id           INTEGER NOT NULL,
+    common_chat_count INTEGER NOT NULL,
+    draw_multiplier   REAL NOT NULL,
+    status            TEXT NOT NULL,
+    checked_at        TIMESTAMP,
+    error             TEXT,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_user_trust_scores_reset ON contest_reset_user_trust_scores(reset_id);
 
 -- contest_reset_winners: архив winners перед reset
 CREATE TABLE IF NOT EXISTS contest_reset_winners (
@@ -244,6 +272,29 @@ CREATE INDEX IF NOT EXISTS idx_contest_reset_temporary_admins_reset ON contest_r
 """
 
 
+async def _ensure_column(
+    db: aiosqlite.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    """Добавить колонку в существующую таблицу, если её ещё нет."""
+    async with db.execute(f"PRAGMA table_info({table})") as cursor:
+        columns = {row[1] for row in await cursor.fetchall()}
+    if column not in columns:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+async def _run_schema_migrations(db: aiosqlite.Connection) -> None:
+    """Лёгкие совместимые миграции для уже существующих SQLite таблиц."""
+    await _ensure_column(
+        db,
+        "contest_reset_runs",
+        "trust_scores_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+
+
 async def get_db() -> aiosqlite.Connection:
     """
     Получить глобальное соединение с БД.
@@ -275,6 +326,7 @@ async def init_db() -> None:
     """
     db = await get_db()
     await db.executescript(_SCHEMA_SQL)
+    await _run_schema_migrations(db)
     await db.commit()
     logger.info("Схема БД инициализирована успешно.")
 

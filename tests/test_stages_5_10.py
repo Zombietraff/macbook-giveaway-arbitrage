@@ -361,6 +361,43 @@ class TestDrawLogic(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_hidden_trust_multiplier_changes_effective_draw_weight(self) -> None:
+        """Trust x5 меняет скрытый draw weight, не меняя visible tickets."""
+        async def _run() -> None:
+            import db.database as database_mod
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                from db.models import add_user_tickets, create_user, set_user_trust_score
+                from utils.draw import _get_eligible_users
+
+                await create_user(100, "boosted", "Boost", "L", "ru", False, "trust100")
+                await create_user(200, "plain", "Plain", "L", "ru", False, "trust200")
+                await add_user_tickets(100, 1.0)
+                await add_user_tickets(200, 1.0)
+                await set_user_trust_score(100, common_chat_count=1)
+
+                mock_bot = AsyncMock()
+                with patch("utils.draw.check_subscription", new=AsyncMock(return_value=(True, []))):
+                    eligible = await _get_eligible_users(mock_bot)
+
+                by_id = {user["id"]: user for user in eligible}
+                self.assertEqual(by_id[100]["tickets"], 1.0)
+                self.assertEqual(by_id[100]["draw_multiplier"], 5.0)
+                self.assertEqual(by_id[100]["effective_weight"], 5.0)
+                self.assertEqual(by_id[200]["draw_multiplier"], 1.0)
+                self.assertEqual(by_id[200]["effective_weight"], 1.0)
+            finally:
+                await conn.close()
+                database_mod._connection = None
+
+        asyncio.run(_run())
+
 
 class TestWinnersDisplay(unittest.TestCase):
     """Тесты отображения победителей."""
@@ -511,6 +548,57 @@ class TestAdminFunctions(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_trust_score_multiplier_logic(self) -> None:
+        """Common groups map to hidden x1/x5 multipliers."""
+        async def _run() -> None:
+            tmp_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+            db_path = tmp_file.name
+            tmp_file.close()
+
+            import db.database as database_mod
+            from db.models import (
+                calculate_trust_multiplier,
+                create_user,
+                get_trust_stats,
+                get_user_draw_multiplier,
+                get_user_trust_score,
+                set_user_trust_score,
+            )
+
+            conn = await aiosqlite.connect(db_path, check_same_thread=False)
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                self.assertEqual(calculate_trust_multiplier(0), 1.0)
+                self.assertEqual(calculate_trust_multiplier(1), 5.0)
+                self.assertEqual(calculate_trust_multiplier(3), 5.0)
+
+                await create_user(100, "plain", "Plain", "T", "ru", False, "trust_plain")
+                await create_user(200, "boosted", "Boost", "T", "ru", False, "trust_boost")
+                await set_user_trust_score(100, common_chat_count=0)
+                await set_user_trust_score(200, common_chat_count=3)
+
+                self.assertEqual(await get_user_draw_multiplier(100), 1.0)
+                self.assertEqual(await get_user_draw_multiplier(200), 5.0)
+                boosted = await get_user_trust_score(200)
+                self.assertEqual(boosted["status"], "boosted")
+                self.assertEqual(boosted["common_chat_count"], 3)
+
+                stats = await get_trust_stats()
+                self.assertEqual(stats["total"], 2)
+                self.assertEqual(stats["plain"], 1)
+                self.assertEqual(stats["boosted"], 1)
+                self.assertEqual(stats["strong_common_3_plus"], 1)
+            finally:
+                await conn.close()
+                database_mod._connection = None
+                os.unlink(db_path)
+
+        asyncio.run(_run())
+
     def test_reset_contest_archives_and_clears_selected_state(self) -> None:
         """Owner reset архивирует данные и очищает состояние нового конкурса."""
         async def _run() -> None:
@@ -528,12 +616,14 @@ class TestAdminFunctions(unittest.TestCase):
                 add_winner,
                 create_referral,
                 create_user,
+                get_trust_stats,
                 get_contest_reset_preview,
                 get_contest_reset_runs,
                 get_setting,
                 get_user,
                 reset_contest_with_archive,
                 set_setting,
+                set_user_trust_score,
                 set_user_flag,
             )
 
@@ -552,6 +642,7 @@ class TestAdminFunctions(unittest.TestCase):
                 await set_user_flag(100, "keep_flag")
                 await set_setting("active_plugin_key", "cherry-charm")
                 await add_admin_audit_log(111, "before_reset")
+                await set_user_trust_score(100, common_chat_count=1)
 
                 await add_winner(100, "MacBook Neo", datetime.now())
                 await add_channel("-1001", "Channel", "https://t.me/example")
@@ -580,6 +671,7 @@ class TestAdminFunctions(unittest.TestCase):
                 self.assertEqual(preview["casino_spins_count"], 1)
                 self.assertEqual(preview["channels_count"], 1)
                 self.assertEqual(preview["promocodes_count"], 1)
+                self.assertEqual(preview["trust_scores_count"], 1)
                 self.assertEqual(preview["active_temp_admins_count"], 1)
 
                 result = await reset_contest_with_archive(actor_id=111)
@@ -596,6 +688,7 @@ class TestAdminFunctions(unittest.TestCase):
                     "casino_spins": 0,
                     "channels": 0,
                     "promocodes": 0,
+                    "user_trust_scores": 0,
                     "temporary_admins": 0,
                     "referrals": 1,
                     "user_flags": 1,
@@ -611,6 +704,7 @@ class TestAdminFunctions(unittest.TestCase):
                     "contest_reset_casino_spins": 1,
                     "contest_reset_channels": 1,
                     "contest_reset_promocodes": 1,
+                    "contest_reset_user_trust_scores": 1,
                     "contest_reset_temporary_admins": 1,
                 }
                 for table, expected in archive_checks.items():
@@ -623,6 +717,10 @@ class TestAdminFunctions(unittest.TestCase):
                 runs = await get_contest_reset_runs()
                 self.assertEqual(runs[0]["id"], reset_id)
                 self.assertEqual(runs[0]["actor_id"], 111)
+                self.assertEqual(runs[0]["trust_scores_count"], 1)
+
+                trust_stats = await get_trust_stats()
+                self.assertEqual(trust_stats["total"], 0)
             finally:
                 await conn.close()
                 database_mod._connection = None

@@ -42,6 +42,7 @@ from db.models import (
     get_contest_reset_runs,
     get_end_date,
     get_temporary_admins,
+    get_trust_stats,
     remove_channel as delete_channel,
     reset_contest_with_archive,
     revoke_temporary_admin,
@@ -180,7 +181,7 @@ _ADMIN_MENU_HELP = {
     ),
     "admins": "👑 Временные админы: /list_admins, /add_admin <telegram_id>, /remove_admin <telegram_id>",
     "plugins": "🎮 Мини-игры: /list_plugins, /set_plugin <plugin_key>",
-    "system": "⚙️ Система: /webapp_url, /refresh_menu, /list_plugins, /reset_history",
+    "system": "⚙️ Система: /webapp_url, /refresh_menu, /list_plugins, /trust_stats, /reset_history",
     "reset": "🧹 Сброс конкурса: /reset_contest. История сбросов: /reset_history",
 }
 
@@ -233,8 +234,9 @@ def _format_reset_preview(preview: dict[str, int | float]) -> str:
         f"🎰 Casino spins: <b>{preview['casino_spins_count']}</b>\n"
         f"📢 Channels: <b>{preview['channels_count']}</b>\n"
         f"🥚 Promocodes: <b>{preview['promocodes_count']}</b>\n"
+        f"🕵️ Trust scores: <b>{preview['trust_scores_count']}</b>\n"
         f"🛠 Active temp admins: <b>{preview['active_temp_admins_count']}</b>\n\n"
-        "Будут очищены tickets, winners, spins, channels, promocodes и temporary admins. "
+        "Будут очищены tickets, trust scores, winners, spins, channels, promocodes и temporary admins. "
         "Users, referrals, settings, user_flags и audit log останутся."
     )
 
@@ -584,6 +586,7 @@ async def reset_contest_confirm(callback: CallbackQuery, **kwargs: Any) -> None:
         f"🎰 Spins очищено: <b>{result['casino_spins_count']}</b>\n"
         f"📢 Channels очищено: <b>{result['channels_count']}</b>\n"
         f"🥚 Promocodes очищено: <b>{result['promocodes_count']}</b>\n"
+        f"🕵️ Trust scores очищено: <b>{result['trust_scores_count']}</b>\n"
         f"🛠 Temp admins очищено: <b>{result['temp_admins_count']}</b>"
     )
     if callback.message:
@@ -617,9 +620,33 @@ async def reset_history(message: Message, **kwargs: Any) -> None:
             f"<b>{run['channels_count']}</b> / "
             f"<b>{run['promocodes_count']}</b> / "
             f"<b>{run['temp_admins_count']}</b>"
+            f"\nTrust scores: <b>{run['trust_scores_count']}</b>"
         )
     await message.answer("\n".join(lines))
     _log_admin_action(message.from_user.id, "reset_history")
+
+
+@router.message(Command("trust_stats"))
+async def trust_stats(message: Message, **kwargs: Any) -> None:
+    """Показать owner-only агрегаты скрытого trust score."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    stats = await get_trust_stats()
+    text = (
+        "🕵️ <b>Hidden trust stats</b>\n\n"
+        f"Всего проверок: <b>{stats['total']}</b>\n"
+        f"Boosted x5: <b>{stats['boosted']}</b>\n"
+        f"Plain x1: <b>{stats['plain']}</b>\n"
+        f"Unresolvable: <b>{stats['unresolvable']}</b>\n"
+        f"Errors: <b>{stats['error']}</b>\n"
+        f"Disabled: <b>{stats['disabled']}</b>\n\n"
+        f"3+ common groups: <b>{stats['strong_common_3_plus']}</b>\n"
+        f"Avg common groups: <b>{stats['avg_common_chat_count']:.2f}</b>\n"
+        f"Max common groups: <b>{stats['max_common_chat_count']}</b>"
+    )
+    await message.answer(text)
+    _log_admin_action(message.from_user.id, "trust_stats")
 
 
 @router.message(Command("admin_stats"))

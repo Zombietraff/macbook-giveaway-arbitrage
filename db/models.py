@@ -18,6 +18,26 @@ from utils.timezone import to_sqlite_utc
 
 logger = logging.getLogger(__name__)
 
+TRUST_STATUS_BOOSTED = "boosted"
+TRUST_STATUS_PLAIN = "plain"
+TRUST_STATUS_UNRESOLVABLE = "unresolvable"
+TRUST_STATUS_ERROR = "error"
+TRUST_STATUS_DISABLED = "disabled"
+TRUST_DEFAULT_MULTIPLIER = 1.0
+TRUST_BOOST_MULTIPLIER = 5.0
+_TRUST_STATUSES = frozenset({
+    TRUST_STATUS_BOOSTED,
+    TRUST_STATUS_PLAIN,
+    TRUST_STATUS_UNRESOLVABLE,
+    TRUST_STATUS_ERROR,
+    TRUST_STATUS_DISABLED,
+})
+
+
+def calculate_trust_multiplier(common_chat_count: int) -> float:
+    """Посчитать скрытый draw multiplier по числу common groups."""
+    return TRUST_BOOST_MULTIPLIER if int(common_chat_count) >= 1 else TRUST_DEFAULT_MULTIPLIER
+
 
 # ════════════════════════════════════════════════════════════
 #  USERS
@@ -439,6 +459,8 @@ async def _collect_contest_reset_preview(db: aiosqlite.Connection) -> dict[str, 
         channels_count = int((await cursor.fetchone())[0] or 0)
     async with db.execute("SELECT COUNT(*) FROM promocodes") as cursor:
         promocodes_count = int((await cursor.fetchone())[0] or 0)
+    async with db.execute("SELECT COUNT(*) FROM user_trust_scores") as cursor:
+        trust_scores_count = int((await cursor.fetchone())[0] or 0)
     async with db.execute("SELECT COUNT(*) FROM temporary_admins WHERE revoked_at IS NULL") as cursor:
         active_temp_admins_count = int((await cursor.fetchone())[0] or 0)
     async with db.execute("SELECT COUNT(*) FROM temporary_admins") as cursor:
@@ -451,6 +473,7 @@ async def _collect_contest_reset_preview(db: aiosqlite.Connection) -> dict[str, 
         "casino_spins_count": casino_spins_count,
         "channels_count": channels_count,
         "promocodes_count": promocodes_count,
+        "trust_scores_count": trust_scores_count,
         "active_temp_admins_count": active_temp_admins_count,
         "temp_admins_count": temp_admins_count,
     }
@@ -484,10 +507,11 @@ async def reset_contest_with_archive(actor_id: int) -> dict[str, int | float]:
                 casino_spins_count,
                 channels_count,
                 promocodes_count,
+                trust_scores_count,
                 active_temp_admins_count,
                 temp_admins_count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 actor_id,
@@ -497,6 +521,7 @@ async def reset_contest_with_archive(actor_id: int) -> dict[str, int | float]:
                 preview["casino_spins_count"],
                 preview["channels_count"],
                 preview["promocodes_count"],
+                preview["trust_scores_count"],
                 preview["active_temp_admins_count"],
                 preview["temp_admins_count"],
             ),
@@ -536,6 +561,29 @@ async def reset_contest_with_archive(actor_id: int) -> dict[str, int | float]:
                 blocked_bot
             FROM users
             WHERE tickets != 0
+            """,
+            (reset_id,),
+        )
+        await db.execute(
+            """
+            INSERT INTO contest_reset_user_trust_scores (
+                reset_id,
+                user_id,
+                common_chat_count,
+                draw_multiplier,
+                status,
+                checked_at,
+                error
+            )
+            SELECT
+                ?,
+                user_id,
+                common_chat_count,
+                draw_multiplier,
+                status,
+                checked_at,
+                error
+            FROM user_trust_scores
             """,
             (reset_id,),
         )
@@ -617,6 +665,7 @@ async def reset_contest_with_archive(actor_id: int) -> dict[str, int | float]:
         )
 
         await db.execute("UPDATE users SET tickets = 0, last_check_at = NULL")
+        await db.execute("DELETE FROM user_trust_scores")
         await db.execute("DELETE FROM winners")
         await db.execute("DELETE FROM casino_spins")
         await db.execute("DELETE FROM channels")
@@ -670,6 +719,121 @@ async def set_user_flag(user_id: int, flag: str) -> None:
         (user_id, flag),
     )
     await db.commit()
+
+
+# ════════════════════════════════════════════════════════════
+#  HIDDEN TRUST SCORES
+# ════════════════════════════════════════════════════════════
+
+async def set_user_trust_score(
+    user_id: int,
+    common_chat_count: int,
+    status: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Сохранить скрытый trust score пользователя для draw weighting."""
+    common_chat_count = max(0, int(common_chat_count))
+    status_value = status or (
+        TRUST_STATUS_BOOSTED if common_chat_count >= 1 else TRUST_STATUS_PLAIN
+    )
+    if status_value not in _TRUST_STATUSES:
+        raise ValueError("invalid_trust_status")
+
+    if status_value == TRUST_STATUS_BOOSTED:
+        multiplier = calculate_trust_multiplier(common_chat_count)
+    else:
+        multiplier = TRUST_DEFAULT_MULTIPLIER
+
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO user_trust_scores (
+            user_id,
+            common_chat_count,
+            draw_multiplier,
+            status,
+            checked_at,
+            error
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            common_chat_count = excluded.common_chat_count,
+            draw_multiplier = excluded.draw_multiplier,
+            status = excluded.status,
+            checked_at = excluded.checked_at,
+            error = excluded.error
+        """,
+        (
+            user_id,
+            common_chat_count,
+            multiplier,
+            status_value,
+            datetime.now(UTC).isoformat(),
+            error,
+        ),
+    )
+    await db.commit()
+
+
+async def get_user_trust_score(user_id: int) -> Optional[aiosqlite.Row]:
+    """Получить скрытый trust score пользователя."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT * FROM user_trust_scores WHERE user_id = ?",
+        (user_id,),
+    ) as cursor:
+        return await cursor.fetchone()
+
+
+async def get_user_draw_multiplier(user_id: int) -> float:
+    """Получить скрытый draw multiplier, default x1 при отсутствии row."""
+    row = await get_user_trust_score(user_id)
+    if not row:
+        return TRUST_DEFAULT_MULTIPLIER
+    return float(row["draw_multiplier"] or TRUST_DEFAULT_MULTIPLIER)
+
+
+async def get_trust_stats() -> dict[str, Any]:
+    """Собрать owner-only агрегаты скрытого trust scoring."""
+    db = await get_db()
+
+    stats: dict[str, Any] = {
+        "total": 0,
+        "boosted": 0,
+        "plain": 0,
+        "unresolvable": 0,
+        "error": 0,
+        "disabled": 0,
+        "strong_common_3_plus": 0,
+        "avg_common_chat_count": 0.0,
+        "max_common_chat_count": 0,
+    }
+
+    async with db.execute("SELECT COUNT(*) FROM user_trust_scores") as cursor:
+        stats["total"] = int((await cursor.fetchone())[0] or 0)
+
+    async with db.execute(
+        "SELECT status, COUNT(*) AS cnt FROM user_trust_scores GROUP BY status"
+    ) as cursor:
+        for row in await cursor.fetchall():
+            stats[str(row["status"])] = int(row["cnt"])
+
+    async with db.execute(
+        """
+        SELECT
+            COALESCE(AVG(common_chat_count), 0) AS avg_common,
+            COALESCE(MAX(common_chat_count), 0) AS max_common,
+            SUM(CASE WHEN common_chat_count >= 3 THEN 1 ELSE 0 END) AS strong_count
+        FROM user_trust_scores
+        """
+    ) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            stats["avg_common_chat_count"] = float(row["avg_common"] or 0.0)
+            stats["max_common_chat_count"] = int(row["max_common"] or 0)
+            stats["strong_common_3_plus"] = int(row["strong_count"] or 0)
+
+    return stats
 
 
 async def get_user_casino_daily_spins(

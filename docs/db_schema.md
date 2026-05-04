@@ -123,6 +123,23 @@ Known flags:
 
 - `webapp_disclaimer_accepted`: user accepted the WebApp entertainment disclaimer.
 
+## user_trust_scores
+
+Hidden owner-only draw weighting data from the Telethon userbot common-groups
+check. This is never shown to users.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `INTEGER PRIMARY KEY` | User ID, FK to `users.id` |
+| `common_chat_count` | `INTEGER DEFAULT 0` | Common groups with the configured userbot |
+| `draw_multiplier` | `REAL DEFAULT 1.0` | `5.0` when `common_chat_count >= 1`, else `1.0` |
+| `status` | `TEXT` | `boosted`, `plain`, `unresolvable`, `error`, or `disabled` |
+| `checked_at` | `TIMESTAMP DEFAULT CURRENT_TIMESTAMP` | Last hidden trust check |
+| `error` | `TEXT` | Internal error/debug text |
+
+`3+` common groups are counted as strong in owner stats, but still use the same
+`5.0` multiplier.
+
 ## temporary_admins
 
 Temporary operational admins managed by owner accounts.
@@ -180,6 +197,7 @@ confirmed.
 | `casino_spins_count` | `INTEGER` | Archived WebApp/casino spins count |
 | `channels_count` | `INTEGER` | Archived channels count |
 | `promocodes_count` | `INTEGER` | Archived promocodes count |
+| `trust_scores_count` | `INTEGER` | Archived hidden trust rows count |
 | `active_temp_admins_count` | `INTEGER` | Active temporary admins before reset |
 | `temp_admins_count` | `INTEGER` | All temporary admin rows before reset |
 
@@ -194,12 +212,13 @@ Full snapshots created before owner reset clears current contest state.
 | `contest_reset_casino_spins` | All rows from `casino_spins` |
 | `contest_reset_channels` | All rows from `channels` |
 | `contest_reset_promocodes` | All rows from `promocodes` |
+| `contest_reset_user_trust_scores` | All rows from `user_trust_scores` |
 | `contest_reset_temporary_admins` | All rows from `temporary_admins` |
 
 Reset behavior:
 
 - `users` are kept, but `tickets` becomes `0` and `last_check_at` becomes `NULL`.
-- `winners`, `casino_spins`, `channels`, `promocodes`, and `temporary_admins` are cleared.
+- `winners`, `casino_spins`, `channels`, `promocodes`, `user_trust_scores`, and `temporary_admins` are cleared.
 - `settings`, `referrals`, `user_flags`, and `admin_audit_log` are not cleared.
 
 ## Plugins

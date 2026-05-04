@@ -3,7 +3,7 @@
 
 Логика:
 1. Выбрать кандидатов (tickets > 0, blocked_bot=False) и live-проверить подписку.
-2. Взвешенный рандом: random.choices с весами = tickets.
+2. Взвешенный рандом: random.choices с весами = tickets * hidden draw_multiplier.
 3. 4 уникальных победителя: первые 3 → MacBook Neo, 4-й → AirPods 3 Pro.
 4. Попытка отправки сообщения; при ошибке → исключить и пересчитать.
 5. Запись в таблицу winners + лог.
@@ -48,9 +48,18 @@ async def _get_eligible_users(bot: Bot) -> list[dict]:
     db = await get_db()
     async with db.execute(
         """
-        SELECT id, username, first_name, tickets, language_code
-        FROM users
-        WHERE tickets > 0 AND blocked_bot = FALSE
+        SELECT
+            u.id,
+            u.username,
+            u.first_name,
+            u.tickets,
+            u.language_code,
+            COALESCE(uts.common_chat_count, 0) AS common_chat_count,
+            COALESCE(uts.draw_multiplier, 1.0) AS draw_multiplier,
+            COALESCE(uts.status, 'missing') AS trust_status
+        FROM users u
+        LEFT JOIN user_trust_scores uts ON uts.user_id = u.id
+        WHERE u.tickets > 0 AND u.blocked_bot = FALSE
         """
     ) as cursor:
         rows = await cursor.fetchall()
@@ -75,12 +84,19 @@ async def _get_eligible_users(bot: Bot) -> list[dict]:
             )
             continue
 
+        tickets = float(row["tickets"] or 0.0)
+        draw_multiplier = float(row["draw_multiplier"] or 1.0)
+        effective_weight = tickets * draw_multiplier
         users.append({
             "id": row["id"],
             "username": row["username"],
             "first_name": row["first_name"],
-            "tickets": row["tickets"],
+            "tickets": tickets,
             "language_code": row["language_code"],
+            "common_chat_count": int(row["common_chat_count"] or 0),
+            "draw_multiplier": draw_multiplier,
+            "trust_status": row["trust_status"],
+            "effective_weight": effective_weight,
         })
 
     _log_draw(
@@ -110,7 +126,10 @@ async def perform_draw(bot: Bot) -> list[dict]:
 
     # Лог весов
     for u in eligible:
-        _log_draw(f"  user={u['id']} tickets={u['tickets']}")
+        _log_draw(
+            f"  user={u['id']} tickets={u['tickets']} "
+            f"multiplier={u['draw_multiplier']} effective_weight={u['effective_weight']}"
+        )
 
     # 2. Выбор победителей
     winners: list[dict] = []
@@ -123,7 +142,7 @@ async def perform_draw(bot: Bot) -> list[dict]:
             break
 
         # Взвешенный рандом
-        weights = [u["tickets"] for u in remaining]
+        weights = [u["effective_weight"] for u in remaining]
 
         while remaining:
             selected = random.choices(remaining, weights=weights, k=1)[0]
@@ -162,7 +181,7 @@ async def perform_draw(bot: Bot) -> list[dict]:
                     f"Не удалось уведомить user={selected['id']}. Исключение и пересчёт."
                 )
                 remaining = [u for u in remaining if u["id"] != selected["id"]]
-                weights = [u["tickets"] for u in remaining]
+                weights = [u["effective_weight"] for u in remaining]
 
     _log_draw(f"Розыгрыш завершён. Победителей: {len(winners)}")
 

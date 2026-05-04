@@ -45,11 +45,29 @@ def _parse_int_list(raw_value: str) -> list[int]:
     ]
 
 
+def _optional_int_env(key: str) -> int | None:
+    """Получить optional int env-переменную."""
+    value = os.getenv(key)
+    return int(value) if value else None
+
+
+def _path_env(key: str, default: str) -> Path:
+    """Получить path env-переменную относительно BASE_DIR, если путь не absolute."""
+    raw_value = os.getenv(key, default)
+    path = Path(raw_value)
+    return path if path.is_absolute() else BASE_DIR / path
+
+
 # ──────────────────── Telegram ────────────────────
 BOT_TOKEN: Final[str] = _require_env("BOT_TOKEN")
 BOT_USERNAME: Final[str] = os.getenv("BOT_USERNAME", "ContestBot")
 WEBAPP_URL: Final[str] = os.getenv("WEBAPP_URL", "https://your-domain.com")
 MAX_USER_ID: Final[int] = int(os.getenv("MAX_USER_ID", "8000000000"))
+
+# ──────────────────── Hidden userbot trust check ────────────────────
+TELEGRAM_API_ID: Final[int | None] = _optional_int_env("TELEGRAM_API_ID")
+TELEGRAM_API_HASH: Final[str | None] = os.getenv("TELEGRAM_API_HASH")
+USERBOT_SESSION_PATH: Final[Path] = _path_env("USERBOT_SESSION_PATH", "userbot.session")
 
 # ──────────────────── Администраторы ────────────────────
 _owner_ids_raw = os.getenv("OWNER_IDS") or os.getenv("ADMIN_IDS")

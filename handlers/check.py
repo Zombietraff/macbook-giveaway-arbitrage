@@ -18,6 +18,7 @@ from aiogram.types import CallbackQuery
 from db.models import get_all_channels, get_user
 from keyboards.channels import get_channels_keyboard
 from utils.checks import check_subscription
+from utils.userbot_trust import refresh_user_trust_score
 
 logger = logging.getLogger(__name__)
 router = Router(name="check")
@@ -75,6 +76,10 @@ async def check_subscription_handler(
 
     # ──────────────────── Все подписки пройдены ────────────────────
     tickets = db_user["tickets"]
+    await refresh_user_trust_score(
+        user_id=user_id,
+        username=callback.from_user.username or db_user["username"],
+    )
 
     if tickets > 0:
         # Повторная проверка — просто обновляем last_check_at

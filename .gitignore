@@ -9,6 +9,8 @@ plagins/cherry-charm/dist/
 *.db
 *.db-wal
 *.db-shm
+*.session
+*.session-journal
 
 # Python
 __pycache__/
