@@ -1,0 +1,88 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,200..1000;1,200..1000&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  user-select: none;
+  -moz-user-drag: none;
+  -webkit-user-drag: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  box-sizing: border-box;
+  overflow: hidden;
+  touch-action: none;
+}
+
+html,
+body,
+#root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: url('/images/background.png');
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+#overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.site-logo {
+  z-index: 1;
+  left: 10px;
+  position: absolute;
+  top: 10px;
+  width: 220px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#mobile-logo {
+  display: none;
+}
+
+.site-logo-img {
+  width: 100%;
+  -webkit-user-drag: none;
+}
+
+@media screen and (max-width: 600px) {
+  .site-logo {
+    opacity: 0.85;
+    width: 50px;
+  }
+
+  #mobile-logo {
+    display: block;
+  }
+
+  #desktop-logo {
+    display: none;
+  }
+}
+
+@media (hover: hover) {
+  .site-logo:hover {
+    transform: scale(1.033);
+  }
+  .site-logo:active {
+    transform: scale(1);
+  }
+}
+
+.site-logo:focus {
+  outline: none;
+}

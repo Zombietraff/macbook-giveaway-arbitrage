@@ -1,0 +1,175 @@
+.interface {
+  pointer-events: none;
+  z-index: 1;
+  position: absolute;
+  margin: 1em;
+  color: #fff;
+}
+
+#logo-section {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  margin: 0.5em;
+  pointer-events: none;
+}
+
+.logo {
+  width: 300px;
+  transform: rotate(-3deg);
+  filter: drop-shadow(0 0 5px rgb(255, 255, 255));
+}
+
+#version {
+  color: #f7f7f7;
+  font-family: monospace;
+  margin-left: 110px;
+  animation: fadeOut 1s ease 10s forwards;
+}
+
+@keyframes fadeOut {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+.win-section {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  margin: 1em;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+}
+
+.win-label,
+.win-amount {
+  font-size: 65px;
+}
+
+.win-amount {
+  margin-left: 20px;
+}
+
+.bet-section {
+  position: fixed;
+  bottom: 0;
+  text-align: center;
+  margin: auto auto 0.2em auto;
+  width: 100%;
+  font-size: 65px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1em;
+}
+
+.bet-label {
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.bet-amount {
+  width: 150px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+#bet-controls {
+  margin-left: 0.25em;
+}
+
+.hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.bet-control {
+  margin: 0;
+  font-size: 70px;
+  line-height: 40px;
+  text-align: center;
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.bet-control:hover {
+  color: #ffc400;
+}
+
+.coins-section {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  margin: 1em;
+}
+
+.coins-number {
+  font-size: 65px;
+  width: 400px;
+  text-align: right;
+}
+
+.coins-image {
+  margin-left: 1vw;
+  width: 65px;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .logo {
+    width: 175px;
+    transform: rotate(-3deg);
+  }
+
+  .win-label,
+  .win-amount {
+    font-size: 35px;
+  }
+
+  .win-amount {
+    margin-left: 10px;
+  }
+
+  .bet-section {
+    font-size: 35px;
+    bottom: 60px;
+  }
+
+  .bet-amount {
+    width: 90px;
+  }
+
+  .bet-control {
+    font-size: 50px;
+    line-height: 30px;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  #bet-controls {
+    margin-left: 0;
+  }
+
+  .coins-number {
+    font-size: 35px;
+    width: 400px;
+  }
+
+  .coins-image {
+    margin-left: 1vw;
+    width: 30px;
+  }
+}
