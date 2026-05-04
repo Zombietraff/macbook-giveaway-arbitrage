@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import WebApp from '@twa-dev/sdk';
 import useGame from '../../stores/store';
 import { t } from '../../i18n';
+import { getTelegramAuthHeaders } from '../../utils/telegramAuth';
 import './style.css';
 
 const DisclaimerModal = () => {
@@ -18,9 +18,7 @@ const DisclaimerModal = () => {
     try {
       const response = await fetch('/api/disclaimer/accept', {
         method: 'POST',
-        headers: {
-          Authorization: `tma ${WebApp.initData}`,
-        },
+        headers: getTelegramAuthHeaders(),
       });
       const data = await response.json();
 

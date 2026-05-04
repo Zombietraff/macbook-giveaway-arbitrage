@@ -6,6 +6,7 @@ import useGame from './stores/store';
 import { useEffect } from 'react';
 import WebApp from '@twa-dev/sdk';
 import { normalizeLanguage } from './i18n';
+import { getTelegramAuthHeaders } from './utils/telegramAuth';
 
 const App = () => {
   const {
@@ -23,11 +24,8 @@ const App = () => {
     WebApp.expand();
     
     // Fetch initial balance
-    const initData = WebApp.initData;
     fetch('/api/user', {
-      headers: {
-        'Authorization': `tma ${initData}`
-      }
+      headers: getTelegramAuthHeaders(),
     })
     .then(res => res.json())
     .then(data => {

@@ -40,10 +40,15 @@ def webapp_auth(func):
     """Decorator to enforce Telegram Web App authentication."""
     async def wrapper(request: web.Request):
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("tma "):
+        init_data = ""
+        if auth_header.startswith("tma "):
+            init_data = auth_header[4:].strip()
+        if not init_data:
+            init_data = request.headers.get("X-Telegram-Init-Data", "").strip()
+
+        if not init_data:
             return web.json_response({"error": "Unauthorized"}, status=401)
             
-        init_data = auth_header[4:]
         user_data = validate_init_data(init_data, BOT_TOKEN)
         if not user_data:
             return web.json_response({"error": "Forbidden: Invalid signature"}, status=403)
@@ -197,13 +202,13 @@ def setup_routes(app: web.Application):
                 headers={
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                    "Access-Control-Allow-Headers": "Authorization, X-Telegram-Init-Data, Content-Type",
                 }
             )
         response = await handler(request)
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, X-Telegram-Init-Data, Content-Type"
         return response
 
     app.middlewares.append(cors_middleware)

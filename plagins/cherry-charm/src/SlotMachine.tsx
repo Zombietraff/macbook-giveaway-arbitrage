@@ -14,8 +14,8 @@ import { WHEEL_SEGMENT } from './utils/constants';
 import Reel from './Reel';
 import Button from './Button';
 
-import WebApp from '@twa-dev/sdk';
 import { getSegmentForFruit } from './utils/functions/fruitToSegment';
+import { getTelegramAuthHeaders } from './utils/telegramAuth';
 
 interface ReelGroup extends THREE.Group {
   reelSegment?: number;
@@ -110,7 +110,7 @@ const SlotMachine = forwardRef(({ value }: SlotMachineProps, ref) => {
       const response = await fetch('/api/spin', {
         method: 'POST',
         headers: {
-          'Authorization': `tma ${WebApp.initData}`,
+          ...getTelegramAuthHeaders(),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ bet: currentBetAmount })
