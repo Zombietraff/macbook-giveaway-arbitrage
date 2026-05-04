@@ -1,0 +1,12 @@
+{
+  "scripts": {
+    "webapp:dev": "npm --prefix plagins/cherry-charm run dev",
+    "bot:dev": "uv run python main.py",
+    "tunnel:pinggy": "ssh -p 443 -R0:127.0.0.1:5173 a.pinggy.io",
+    "tunnel:pinggy:debug": "ssh -p 443 -R0:127.0.0.1:5173 -L4300:127.0.0.1:4300 a.pinggy.io",
+    "webapp:url": "uv run python scripts/update_webapp_url.py"
+  },
+  "dependencies": {
+    "@twa-dev/sdk": "^8.0.2"
+  }
+}

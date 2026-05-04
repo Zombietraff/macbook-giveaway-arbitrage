@@ -78,11 +78,11 @@ async def back_to_menu(
     **kwargs: Any,
 ) -> None:
     """Возврат в главное меню по кнопке «Назад»."""
-    from keyboards.main_menu import get_main_menu_keyboard
+    from keyboards.main_menu import get_active_main_menu_keyboard
 
     await callback.message.delete()
     await callback.message.answer(
         "📱",
-        reply_markup=get_main_menu_keyboard(lang),
+        reply_markup=await get_active_main_menu_keyboard(lang),
     )
     await callback.answer()

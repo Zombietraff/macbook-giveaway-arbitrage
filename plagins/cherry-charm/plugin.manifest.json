@@ -1,0 +1,8 @@
+{
+  "key": "cherry-charm",
+  "name": "Giveaway Game",
+  "webapp_path": "/",
+  "build_dir": "dist",
+  "package_dir": ".",
+  "enabled": true
+}

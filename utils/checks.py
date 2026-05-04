@@ -16,7 +16,7 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
 )
 
-from config import BLACKLIST_LANG
+from config import BLACKLIST_LANG, MAX_USER_ID
 from db.models import get_all_channels
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,11 @@ def is_valid_language(language_code: Optional[str]) -> bool:
     # Берём первые 2 символа (например, 'zh-hans' → 'zh')
     lang_prefix = language_code.lower()[:2]
     return lang_prefix not in BLACKLIST_LANG
+
+
+def is_valid_user_id(user_id: int) -> bool:
+    """Проверить, что Telegram user_id не выше системного порога."""
+    return int(user_id) <= MAX_USER_ID
 
 
 

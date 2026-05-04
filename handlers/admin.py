@@ -17,12 +17,40 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntity
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonWebApp,
+    Message,
+    MessageEntity,
+    WebAppInfo,
+)
 
 import config
 from db.database import get_db
-from db.models import clear_winners, get_casino_stats, get_end_date, set_end_date, set_user_blocked
-from keyboards.main_menu import get_main_menu_keyboard
+from db.models import (
+    add_admin_audit_log,
+    add_channel,
+    add_promocode,
+    add_temporary_admin,
+    clear_winners,
+    get_all_channels,
+    get_all_promocodes,
+    get_casino_stats,
+    get_contest_reset_preview,
+    get_contest_reset_runs,
+    get_end_date,
+    get_temporary_admins,
+    remove_channel as delete_channel,
+    reset_contest_with_archive,
+    revoke_temporary_admin,
+    set_end_date,
+    set_user_blocked,
+)
+from keyboards.main_menu import get_active_main_menu_keyboard
+from utils.admin_access import can_manage_contest, can_manage_system, is_owner
+from utils.plugins import get_active_plugin_key, get_active_webapp_url, list_plugins, set_active_plugin_key
 from utils.timezone import get_kyiv_day_bounds_utc
 
 logger = logging.getLogger(__name__)
@@ -33,6 +61,9 @@ _ADMIN_LOG = config.LOGS_DIR / "admin.log"
 
 _SEND_CONFIRM_DATA = "send_confirm"
 _SEND_CANCEL_DATA = "send_cancel"
+_ADMIN_MENU_PREFIX = "admin_menu:"
+_RESET_CONFIRM_PREFIX = "reset_contest:confirm:"
+_RESET_CANCEL_PREFIX = "reset_contest:cancel:"
 
 
 class AdminSendState(StatesGroup):
@@ -41,9 +72,14 @@ class AdminSendState(StatesGroup):
     waiting_confirm = State()
 
 
-def _is_admin(user_id: int) -> bool:
+async def _is_admin(user_id: int) -> bool:
     """Проверить, является ли пользователь администратором."""
-    return user_id in config.ADMIN_IDS
+    return await can_manage_contest(user_id)
+
+
+def _is_owner(user_id: int) -> bool:
+    """Проверить, является ли пользователь owner-ом."""
+    return can_manage_system(user_id)
 
 
 def _log_admin_action(admin_id: int, action: str) -> None:
@@ -53,6 +89,10 @@ def _log_admin_action(admin_id: int, action: str) -> None:
     with open(_ADMIN_LOG, "a", encoding="utf-8") as f:
         f.write(line)
     logger.info("Admin action: %s (by %d)", action, admin_id)
+    try:
+        asyncio.create_task(add_admin_audit_log(admin_id, action))
+    except RuntimeError:
+        pass
 
 
 def _fmt_amount(value: float) -> str:
@@ -72,6 +112,77 @@ def _get_send_preview_keyboard() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def _get_reset_preview_keyboard(owner_id: int) -> InlineKeyboardMarkup:
+    """Inline-кнопки подтверждения/отмены owner reset."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить сброс",
+                    callback_data=f"{_RESET_CONFIRM_PREFIX}{owner_id}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"{_RESET_CANCEL_PREFIX}{owner_id}",
+                ),
+            ]
+        ]
+    )
+
+
+def _get_admin_menu_keyboard(owner: bool) -> InlineKeyboardMarkup:
+    """Inline-меню админки с owner/operational разделами."""
+    rows = [
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data=f"{_ADMIN_MENU_PREFIX}stats"),
+            InlineKeyboardButton(text="📣 Рассылка", callback_data=f"{_ADMIN_MENU_PREFIX}send"),
+        ],
+        [
+            InlineKeyboardButton(text="📅 Дата розыгрыша", callback_data=f"{_ADMIN_MENU_PREFIX}date"),
+            InlineKeyboardButton(text="📢 Каналы", callback_data=f"{_ADMIN_MENU_PREFIX}channels"),
+        ],
+        [
+            InlineKeyboardButton(text="🥚 Промокоды", callback_data=f"{_ADMIN_MENU_PREFIX}promos"),
+        ],
+    ]
+    if owner:
+        rows.extend(
+            [
+                [
+                    InlineKeyboardButton(text="👑 Временные админы", callback_data=f"{_ADMIN_MENU_PREFIX}admins"),
+                    InlineKeyboardButton(text="🎮 Мини-игры", callback_data=f"{_ADMIN_MENU_PREFIX}plugins"),
+                ],
+                [
+                    InlineKeyboardButton(text="⚙️ Система", callback_data=f"{_ADMIN_MENU_PREFIX}system"),
+                    InlineKeyboardButton(text="🧹 Сброс конкурса", callback_data=f"{_ADMIN_MENU_PREFIX}reset"),
+                ],
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+_ADMIN_MENU_HELP = {
+    "stats": "📊 Статистика: /admin_stats или /casino_stats",
+    "send": "📣 Рассылка: /send текст сообщения",
+    "date": "📅 Дата: /set_date YYYY-MM-DD HH:MM",
+    "channels": (
+        "📢 Каналы:\n"
+        "/list_channels\n"
+        "/add_channel <channel_id> | <title> | <invite_link>\n"
+        "/remove_channel <channel_id>"
+    ),
+    "promos": (
+        "🥚 Промокоды:\n"
+        "/add_promocode <code>\n"
+        "/add_promocodes <code1> <code2> ..."
+    ),
+    "admins": "👑 Временные админы: /list_admins, /add_admin <telegram_id>, /remove_admin <telegram_id>",
+    "plugins": "🎮 Мини-игры: /list_plugins, /set_plugin <plugin_key>",
+    "system": "⚙️ Система: /webapp_url, /refresh_menu, /list_plugins, /reset_history",
+    "reset": "🧹 Сброс конкурса: /reset_contest. История сбросов: /reset_history",
+}
 
 
 def _extract_send_payload(message: Message) -> tuple[str, list[MessageEntity]]:
@@ -111,10 +222,410 @@ def _extract_send_payload(message: Message) -> tuple[str, list[MessageEntity]]:
     return payload_text, payload_entities
 
 
+def _format_reset_preview(preview: dict[str, int | float]) -> str:
+    """Сформировать текст preview/summary для owner reset."""
+    return (
+        "🧹 <b>Сброс конкурса</b>\n\n"
+        "Перед очисткой данные будут архивированы в историю reset.\n\n"
+        f"👥 Users с tickets: <b>{preview['users_with_tickets_count']}</b>\n"
+        f"🎫 Tickets всего: <b>{_fmt_amount(float(preview['total_tickets']))}</b>\n"
+        f"🏆 Winners: <b>{preview['winners_count']}</b>\n"
+        f"🎰 Casino spins: <b>{preview['casino_spins_count']}</b>\n"
+        f"📢 Channels: <b>{preview['channels_count']}</b>\n"
+        f"🥚 Promocodes: <b>{preview['promocodes_count']}</b>\n"
+        f"🛠 Active temp admins: <b>{preview['active_temp_admins_count']}</b>\n\n"
+        "Будут очищены tickets, winners, spins, channels, promocodes и temporary admins. "
+        "Users, referrals, settings, user_flags и audit log останутся."
+    )
+
+
+@router.message(Command("admin_menu"))
+async def admin_menu(message: Message, **kwargs: Any) -> None:
+    """Показать админское меню по роли пользователя."""
+    user_id = message.from_user.id
+    if not await _is_admin(user_id):
+        return
+
+    owner = _is_owner(user_id)
+    title = "👑 <b>Owner admin panel</b>" if owner else "🛠 <b>Temporary admin panel</b>"
+    await message.answer(
+        title + "\nВыберите раздел или используйте slash-команды.",
+        reply_markup=_get_admin_menu_keyboard(owner),
+    )
+    _log_admin_action(user_id, "admin_menu")
+
+
+@router.message(Command("owner_menu"))
+async def owner_menu(message: Message, **kwargs: Any) -> None:
+    """Показать owner-only меню."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    await message.answer(
+        "👑 <b>Owner panel</b>\n"
+        "Доступы, мини-игры и системные настройки.",
+        reply_markup=_get_admin_menu_keyboard(owner=True),
+    )
+    _log_admin_action(message.from_user.id, "owner_menu")
+
+
+@router.callback_query(F.data.startswith(_ADMIN_MENU_PREFIX))
+async def admin_menu_help(callback: CallbackQuery, **kwargs: Any) -> None:
+    """Подсказки по разделам inline-админки."""
+    user_id = callback.from_user.id
+    if not await _is_admin(user_id):
+        await callback.answer()
+        return
+
+    section = callback.data.removeprefix(_ADMIN_MENU_PREFIX)
+    if section in {"admins", "plugins", "system", "reset"} and not _is_owner(user_id):
+        await callback.answer("Owner-only раздел", show_alert=True)
+        return
+
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(_ADMIN_MENU_HELP.get(section, "Раздел не найден."))
+
+
+@router.message(Command("add_admin"))
+async def add_temp_admin(message: Message, bot: Bot, **kwargs: Any) -> None:
+    """Добавить временного админа (owner-only)."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().lstrip("-").isdigit():
+        await message.answer("⚠️ Формат: <code>/add_admin telegram_id</code>")
+        return
+
+    target_id = int(parts[1].strip())
+    username = None
+    first_name = None
+    try:
+        chat = await bot.get_chat(target_id)
+        username = getattr(chat, "username", None)
+        first_name = getattr(chat, "first_name", None)
+    except Exception:
+        pass
+
+    await add_temporary_admin(
+        user_id=target_id,
+        added_by=message.from_user.id,
+        username=username,
+        first_name=first_name,
+    )
+    await add_admin_audit_log(message.from_user.id, "add_temp_admin", target_id)
+    await message.answer(f"✅ Временный админ добавлен: <code>{target_id}</code>")
+    _log_admin_action(message.from_user.id, f"add_temp_admin: {target_id}")
+
+
+@router.message(Command("remove_admin"))
+async def remove_temp_admin(message: Message, **kwargs: Any) -> None:
+    """Снять временного админа (owner-only)."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().lstrip("-").isdigit():
+        await message.answer("⚠️ Формат: <code>/remove_admin telegram_id</code>")
+        return
+
+    target_id = int(parts[1].strip())
+    await revoke_temporary_admin(target_id)
+    await add_admin_audit_log(message.from_user.id, "remove_temp_admin", target_id)
+    await message.answer(f"✅ Временный админ снят: <code>{target_id}</code>")
+    _log_admin_action(message.from_user.id, f"remove_temp_admin: {target_id}")
+
+
+@router.message(Command("list_admins"))
+async def list_temp_admins(message: Message, **kwargs: Any) -> None:
+    """Показать активных временных админов (owner-only)."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    admins = await get_temporary_admins()
+    if not admins:
+        await message.answer("📭 Активных временных админов нет.")
+        return
+
+    lines = ["👑 <b>Owner IDs</b>: " + ", ".join(map(str, config.OWNER_IDS)), "\n🛠 <b>Временные админы</b>"]
+    for admin in admins:
+        name = admin["username"] or admin["first_name"] or "—"
+        lines.append(f"• <code>{admin['user_id']}</code> ({name}), добавил: <code>{admin['added_by']}</code>")
+    await message.answer("\n".join(lines))
+    _log_admin_action(message.from_user.id, "list_admins")
+
+
+@router.message(Command("list_channels"))
+async def list_required_channels(message: Message, **kwargs: Any) -> None:
+    """Показать обязательные каналы."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    channels = await get_all_channels()
+    if not channels:
+        await message.answer("📭 Каналов обязательной подписки нет.")
+        return
+
+    lines = ["📢 <b>Каналы обязательной подписки</b>"]
+    for channel in channels:
+        lines.append(
+            f"• <code>{channel['channel_id']}</code>\n"
+            f"  {channel['title']}\n"
+            f"  {channel['invite_link']}"
+        )
+    await message.answer("\n".join(lines))
+    _log_admin_action(message.from_user.id, "list_channels")
+
+
+@router.message(Command("add_channel"))
+async def admin_add_channel(message: Message, **kwargs: Any) -> None:
+    """Добавить канал обязательной подписки."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    payload = (message.text or "").split(maxsplit=1)
+    if len(payload) < 2:
+        await message.answer("⚠️ Формат: <code>/add_channel channel_id | title | invite_link</code>")
+        return
+
+    parts = [part.strip() for part in payload[1].split("|")]
+    if len(parts) != 3 or not all(parts):
+        await message.answer("⚠️ Формат: <code>/add_channel channel_id | title | invite_link</code>")
+        return
+
+    channel_id, title, invite_link = parts
+    await add_channel(channel_id, title, invite_link)
+    await add_admin_audit_log(
+        message.from_user.id,
+        "add_channel",
+        payload={"channel_id": channel_id, "title": title, "invite_link": invite_link},
+    )
+    await message.answer(f"✅ Канал добавлен: <b>{title}</b> (<code>{channel_id}</code>)")
+    _log_admin_action(message.from_user.id, f"add_channel: {channel_id}")
+
+
+@router.message(Command("remove_channel"))
+async def admin_remove_channel(message: Message, **kwargs: Any) -> None:
+    """Удалить канал обязательной подписки."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠️ Формат: <code>/remove_channel channel_id</code>")
+        return
+
+    channel_id = parts[1].strip()
+    await delete_channel(channel_id)
+    await add_admin_audit_log(message.from_user.id, "remove_channel", payload={"channel_id": channel_id})
+    await message.answer(f"✅ Канал удалён: <code>{channel_id}</code>")
+    _log_admin_action(message.from_user.id, f"remove_channel: {channel_id}")
+
+
+@router.message(Command("add_promocode"))
+async def admin_add_promocode(message: Message, **kwargs: Any) -> None:
+    """Добавить один промокод."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("⚠️ Формат: <code>/add_promocode code</code>")
+        return
+
+    code = parts[1].strip()
+    await add_promocode(code)
+    await add_admin_audit_log(message.from_user.id, "add_promocode", payload={"code": code})
+    await message.answer(f"✅ Промокод добавлен: <code>{code}</code>")
+    _log_admin_action(message.from_user.id, f"add_promocode: {code}")
+
+
+@router.message(Command("add_promocodes"))
+async def admin_add_promocodes(message: Message, **kwargs: Any) -> None:
+    """Добавить несколько промокодов через пробел или новую строку."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠️ Формат: <code>/add_promocodes code1 code2 ...</code>")
+        return
+
+    codes = [code.strip() for code in parts[1].replace("\n", " ").split(" ") if code.strip()]
+    if not codes:
+        await message.answer("⚠️ Укажите хотя бы один промокод.")
+        return
+
+    for code in codes:
+        await add_promocode(code)
+
+    await add_admin_audit_log(message.from_user.id, "add_promocodes", payload={"count": len(codes)})
+    await message.answer(f"✅ Промокоды добавлены: <b>{len(codes)}</b>")
+    _log_admin_action(message.from_user.id, f"add_promocodes: {len(codes)}")
+
+
+@router.message(Command("list_plugins"))
+async def admin_list_plugins(message: Message, **kwargs: Any) -> None:
+    """Показать доступные мини-игры."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    active_key = await get_active_plugin_key()
+    plugins = list_plugins(include_disabled=True)
+    if not plugins:
+        await message.answer("📭 Мини-игры не найдены.")
+        return
+
+    lines = ["🎮 <b>Мини-игры</b>"]
+    for plugin in plugins:
+        marker = "✅" if plugin.key == active_key else "•"
+        status = "enabled" if plugin.enabled else "disabled"
+        lines.append(f"{marker} <code>{plugin.key}</code> — {plugin.name} ({status})")
+    await message.answer("\n".join(lines))
+    _log_admin_action(message.from_user.id, "list_plugins")
+
+
+@router.message(Command("set_plugin"))
+async def admin_set_plugin(message: Message, **kwargs: Any) -> None:
+    """Выбрать активную мини-игру (owner-only)."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠️ Формат: <code>/set_plugin plugin_key</code>")
+        return
+
+    plugin_key = parts[1].strip()
+    try:
+        plugin = await set_active_plugin_key(plugin_key)
+    except ValueError:
+        await message.answer("❌ Неизвестный plugin_key. Посмотрите /list_plugins.")
+        return
+
+    await add_admin_audit_log(message.from_user.id, "set_plugin", payload={"plugin_key": plugin.key})
+    await message.answer(f"✅ Активная мини-игра: <code>{plugin.key}</code> — {plugin.name}")
+    _log_admin_action(message.from_user.id, f"set_plugin: {plugin.key}")
+
+
+@router.message(Command("reset_contest"))
+async def reset_contest_preview(message: Message, **kwargs: Any) -> None:
+    """Показать owner-only preview перед сбросом конкурса."""
+    owner_id = message.from_user.id
+    if not _is_owner(owner_id):
+        return
+
+    preview = await get_contest_reset_preview()
+    await add_admin_audit_log(owner_id, "reset_contest_preview", payload=preview)
+    await message.answer(
+        _format_reset_preview(preview),
+        reply_markup=_get_reset_preview_keyboard(owner_id),
+    )
+    _log_admin_action(owner_id, "reset_contest_preview")
+
+
+@router.callback_query(F.data.startswith(_RESET_CANCEL_PREFIX))
+async def reset_contest_cancel(callback: CallbackQuery, **kwargs: Any) -> None:
+    """Отменить owner reset из preview-кнопки."""
+    if not _is_owner(callback.from_user.id):
+        await callback.answer()
+        return
+
+    owner_id_raw = callback.data.removeprefix(_RESET_CANCEL_PREFIX)
+    if not owner_id_raw.isdigit() or int(owner_id_raw) != callback.from_user.id:
+        await callback.answer("Это подтверждение создано другим owner-ом.", show_alert=True)
+        return
+
+    await add_admin_audit_log(callback.from_user.id, "reset_contest_cancelled")
+    await callback.answer("Сброс отменён")
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer("❌ Сброс конкурса отменён.")
+    _log_admin_action(callback.from_user.id, "reset_contest_cancelled")
+
+
+@router.callback_query(F.data.startswith(_RESET_CONFIRM_PREFIX))
+async def reset_contest_confirm(callback: CallbackQuery, **kwargs: Any) -> None:
+    """Подтвердить owner reset, архивировать данные и очистить конкурс."""
+    if not _is_owner(callback.from_user.id):
+        await callback.answer()
+        return
+
+    owner_id_raw = callback.data.removeprefix(_RESET_CONFIRM_PREFIX)
+    if not owner_id_raw.isdigit() or int(owner_id_raw) != callback.from_user.id:
+        await callback.answer("Это подтверждение создано другим owner-ом.", show_alert=True)
+        return
+
+    await callback.answer("Сбрасываю конкурс...")
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    result = await reset_contest_with_archive(callback.from_user.id)
+    await add_admin_audit_log(
+        callback.from_user.id,
+        "reset_contest_confirmed",
+        target_id=int(result["reset_id"]),
+        payload=result,
+    )
+
+    summary = (
+        "✅ <b>Конкурс сброшен</b>\n\n"
+        f"Archive reset id: <code>{int(result['reset_id'])}</code>\n\n"
+        f"👥 Users с tickets: <b>{result['users_with_tickets_count']}</b>\n"
+        f"🎫 Tickets сброшено: <b>{_fmt_amount(float(result['total_tickets']))}</b>\n"
+        f"🏆 Winners очищено: <b>{result['winners_count']}</b>\n"
+        f"🎰 Spins очищено: <b>{result['casino_spins_count']}</b>\n"
+        f"📢 Channels очищено: <b>{result['channels_count']}</b>\n"
+        f"🥚 Promocodes очищено: <b>{result['promocodes_count']}</b>\n"
+        f"🛠 Temp admins очищено: <b>{result['temp_admins_count']}</b>"
+    )
+    if callback.message:
+        await callback.message.answer(summary)
+    _log_admin_action(callback.from_user.id, f"reset_contest_confirmed: {int(result['reset_id'])}")
+
+
+@router.message(Command("reset_history"))
+async def reset_history(message: Message, **kwargs: Any) -> None:
+    """Показать последние owner reset runs."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    runs = await get_contest_reset_runs(limit=10)
+    if not runs:
+        await message.answer("📭 История сбросов пуста.")
+        return
+
+    lines = ["🧹 <b>История сбросов конкурса</b>"]
+    for run in runs:
+        lines.append(
+            "\n"
+            f"ID: <code>{run['id']}</code>\n"
+            f"Дата: <code>{run['created_at']}</code>\n"
+            f"Owner: <code>{run['actor_id']}</code>\n"
+            f"Users/tickets: <b>{run['users_with_tickets_count']}</b> / "
+            f"<b>{_fmt_amount(float(run['total_tickets']))}</b>\n"
+            f"Winners/spins/channels/promos/temp admins: "
+            f"<b>{run['winners_count']}</b> / "
+            f"<b>{run['casino_spins_count']}</b> / "
+            f"<b>{run['channels_count']}</b> / "
+            f"<b>{run['promocodes_count']}</b> / "
+            f"<b>{run['temp_admins_count']}</b>"
+        )
+    await message.answer("\n".join(lines))
+    _log_admin_action(message.from_user.id, "reset_history")
+
+
 @router.message(Command("admin_stats"))
 async def admin_stats(message: Message, **kwargs: Any) -> None:
     """Показать статистику конкурса (только для админов)."""
-    if not _is_admin(message.from_user.id):
+    if not await _is_admin(message.from_user.id):
         return
 
     db = await get_db()
@@ -153,7 +664,7 @@ async def admin_stats(message: Message, **kwargs: Any) -> None:
 @router.message(Command("set_date"))
 async def set_date(message: Message, **kwargs: Any) -> None:
     """Установить или продлить дату окончания конкурса (только для админов)."""
-    if not _is_admin(message.from_user.id):
+    if not await _is_admin(message.from_user.id):
         return
 
     parts = message.text.strip().split(maxsplit=1)
@@ -194,7 +705,7 @@ async def set_date(message: Message, **kwargs: Any) -> None:
 @router.message(Command("casino_stats"))
 async def casino_stats(message: Message, **kwargs: Any) -> None:
     """Показать статистику модуля казино (только для админов)."""
-    if not _is_admin(message.from_user.id):
+    if not await _is_admin(message.from_user.id):
         return
 
     day_start_utc, day_end_utc = get_kyiv_day_bounds_utc()
@@ -230,10 +741,36 @@ async def casino_stats(message: Message, **kwargs: Any) -> None:
     _log_admin_action(message.from_user.id, "casino_stats")
 
 
+@router.message(Command("webapp_url"))
+async def webapp_url(message: Message, bot: Bot, **kwargs: Any) -> None:
+    """Показать текущий WEBAPP_URL и переустановить Telegram WebApp menu button."""
+    if not _is_owner(message.from_user.id):
+        return
+
+    webapp_url_value = await get_active_webapp_url()
+    menu_button = MenuButtonWebApp(
+        text="🎰 Casino",
+        web_app=WebAppInfo(url=webapp_url_value),
+    )
+
+    await bot.set_chat_menu_button(menu_button=menu_button)
+    await bot.set_chat_menu_button(chat_id=message.chat.id, menu_button=menu_button)
+
+    await message.answer(
+        "🔗 <b>Текущий WEBAPP_URL</b>\n"
+        f"<code>{config.WEBAPP_URL}</code>\n\n"
+        f"🎮 Активная мини-игра URL:\n<code>{webapp_url_value}</code>\n\n"
+        "✅ WebApp menu button переустановлен для default menu и текущего чата.\n"
+        "Отправьте /start заново, чтобы получить свежую reply-клавиатуру.",
+        reply_markup=await get_active_main_menu_keyboard(kwargs.get("lang", "ru")),
+    )
+    _log_admin_action(message.from_user.id, f"webapp_url: {webapp_url_value}")
+
+
 @router.message(Command("refresh_menu"))
 async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
     """Принудительно обновить reply-меню у всех пользователей."""
-    if not _is_admin(message.from_user.id):
+    if not await _is_admin(message.from_user.id):
         return
 
     db = await get_db()
@@ -255,7 +792,7 @@ async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
             await bot.send_message(
                 chat_id=user_id,
                 text="📱",
-                reply_markup=get_main_menu_keyboard(lang),
+                reply_markup=await get_active_main_menu_keyboard(lang),
                 disable_notification=True,
             )
             sent += 1
@@ -293,7 +830,7 @@ async def send_preview(
     **kwargs: Any,
 ) -> None:
     """Подготовить предпросмотр админ-рассылки перед отправкой всем пользователям."""
-    if not _is_admin(message.from_user.id):
+    if not await _is_admin(message.from_user.id):
         return
 
     send_text, send_entities = _extract_send_payload(message)
@@ -331,7 +868,7 @@ async def send_cancel(
     **kwargs: Any,
 ) -> None:
     """Отменить подготовленную админ-рассылку /send."""
-    if not _is_admin(callback.from_user.id):
+    if not await _is_admin(callback.from_user.id):
         await callback.answer()
         return
 
@@ -356,7 +893,7 @@ async def send_confirm(
     **kwargs: Any,
 ) -> None:
     """Подтвердить и выполнить админ-рассылку /send по всем записям users."""
-    if not _is_admin(callback.from_user.id):
+    if not await _is_admin(callback.from_user.id):
         await callback.answer()
         return
 
@@ -437,7 +974,7 @@ async def send_confirm(
 @router.message(Command("draw"))
 async def trigger_draw(message: Message, bot: Bot, **kwargs: Any) -> None:
     """Запустить розыгрыш (только для админов)."""
-    if not _is_admin(message.from_user.id):
+    if not await _is_admin(message.from_user.id):
         return
 
     from aiogram import Bot as BotType

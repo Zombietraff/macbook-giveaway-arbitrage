@@ -2,7 +2,7 @@
 Диагностический скрипт для проверки розыгрыша.
 
 Проверяет:
-1. Конфигурацию (ADMIN_IDS, END_DATE).
+1. Конфигурацию (OWNER_IDS, END_DATE).
 2. Состояние БД (пользователи, билеты, blocked).
 3. Симуляцию розыгрыша (сухой прогон без отправки сообщений).
 4. Список потенциальных проблем и блокеров.
@@ -37,7 +37,7 @@ async def main() -> None:
     import config
 
     print(f"  BOT_USERNAME:  {config.BOT_USERNAME}")
-    print(f"  ADMIN_IDS:     {config.ADMIN_IDS}")
+    print(f"  OWNER_IDS:     {config.OWNER_IDS}")
     print(f"  END_DATE:      {config.END_DATE}")
 
     now = datetime.now()

@@ -7,6 +7,7 @@ CRUD-функции для работы с таблицами БД.
 from __future__ import annotations
 
 import logging
+import json
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -135,6 +136,13 @@ async def add_channel(channel_id: str, title: str, invite_link: str) -> None:
     await db.commit()
 
 
+async def remove_channel(channel_id: str) -> None:
+    """Удалить канал обязательной подписки."""
+    db = await get_db()
+    await db.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+    await db.commit()
+
+
 async def update_channel(channel_id: str, title: str, invite_link: str) -> None:
     """Обновить данные канала (название и ссылку)."""
     db = await get_db()
@@ -176,6 +184,21 @@ async def add_promocode(code: str, channel_id: Optional[int] = None) -> None:
         (code, channel_id),
     )
     await db.commit()
+
+
+async def get_all_promocodes(limit: int = 50) -> list[aiosqlite.Row]:
+    """Получить последние промокоды для админского просмотра."""
+    db = await get_db()
+    async with db.execute(
+        """
+        SELECT *
+        FROM promocodes
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ) as cursor:
+        return await cursor.fetchall()
 
 
 # ════════════════════════════════════════════════════════════
@@ -288,6 +311,338 @@ async def set_end_date(new_date: datetime) -> None:
         (date_str,)
     )
     await db.commit()
+
+
+async def get_setting(key: str) -> Optional[str]:
+    """Получить значение настройки по ключу."""
+    db = await get_db()
+    async with db.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cursor:
+        row = await cursor.fetchone()
+        return str(row["value"]) if row and row["value"] is not None else None
+
+
+async def set_setting(key: str, value: str) -> None:
+    """Установить или обновить настройку."""
+    db = await get_db()
+    await db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (key, value),
+    )
+    await db.commit()
+
+
+# ════════════════════════════════════════════════════════════
+#  ADMINS / AUDIT
+# ════════════════════════════════════════════════════════════
+
+async def add_temporary_admin(
+    user_id: int,
+    added_by: int,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+) -> None:
+    """Добавить или восстановить временного админа."""
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO temporary_admins (user_id, username, first_name, added_by, revoked_at)
+        VALUES (?, ?, ?, ?, NULL)
+        ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            first_name = excluded.first_name,
+            added_by = excluded.added_by,
+            revoked_at = NULL
+        """,
+        (user_id, username, first_name, added_by),
+    )
+    await db.commit()
+
+
+async def revoke_temporary_admin(user_id: int) -> None:
+    """Снять временного админа."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE temporary_admins SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+        (datetime.now(UTC).isoformat(), user_id),
+    )
+    await db.commit()
+
+
+async def is_active_temporary_admin(user_id: int) -> bool:
+    """Проверить, активен ли временный админ."""
+    db = await get_db()
+    async with db.execute(
+        """
+        SELECT 1
+        FROM temporary_admins
+        WHERE user_id = ? AND revoked_at IS NULL
+        LIMIT 1
+        """,
+        (user_id,),
+    ) as cursor:
+        return (await cursor.fetchone()) is not None
+
+
+async def get_temporary_admins(include_revoked: bool = False) -> list[aiosqlite.Row]:
+    """Получить список временных админов."""
+    db = await get_db()
+    where = "" if include_revoked else "WHERE revoked_at IS NULL"
+    async with db.execute(
+        f"""
+        SELECT *
+        FROM temporary_admins
+        {where}
+        ORDER BY created_at DESC
+        """
+    ) as cursor:
+        return await cursor.fetchall()
+
+
+async def add_admin_audit_log(
+    actor_id: int,
+    action: str,
+    target_id: Optional[int] = None,
+    payload: Optional[dict[str, Any] | str] = None,
+) -> None:
+    """Записать действие админа в аудит."""
+    db = await get_db()
+    if isinstance(payload, dict):
+        payload_value = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    else:
+        payload_value = payload
+
+    await db.execute(
+        """
+        INSERT INTO admin_audit_log (actor_id, action, target_id, payload)
+        VALUES (?, ?, ?, ?)
+        """,
+        (actor_id, action, target_id, payload_value),
+    )
+    await db.commit()
+
+
+# ════════════════════════════════════════════════════════════
+#  CONTEST RESET / ARCHIVE
+# ════════════════════════════════════════════════════════════
+
+async def _collect_contest_reset_preview(db: aiosqlite.Connection) -> dict[str, int | float]:
+    """Собрать счётчики данных, которые будут сброшены."""
+    async with db.execute("SELECT COUNT(*) FROM users WHERE tickets != 0") as cursor:
+        users_with_tickets_count = int((await cursor.fetchone())[0] or 0)
+    async with db.execute("SELECT COALESCE(SUM(tickets), 0) FROM users WHERE tickets != 0") as cursor:
+        total_tickets = float((await cursor.fetchone())[0] or 0.0)
+    async with db.execute("SELECT COUNT(*) FROM winners") as cursor:
+        winners_count = int((await cursor.fetchone())[0] or 0)
+    async with db.execute("SELECT COUNT(*) FROM casino_spins") as cursor:
+        casino_spins_count = int((await cursor.fetchone())[0] or 0)
+    async with db.execute("SELECT COUNT(*) FROM channels") as cursor:
+        channels_count = int((await cursor.fetchone())[0] or 0)
+    async with db.execute("SELECT COUNT(*) FROM promocodes") as cursor:
+        promocodes_count = int((await cursor.fetchone())[0] or 0)
+    async with db.execute("SELECT COUNT(*) FROM temporary_admins WHERE revoked_at IS NULL") as cursor:
+        active_temp_admins_count = int((await cursor.fetchone())[0] or 0)
+    async with db.execute("SELECT COUNT(*) FROM temporary_admins") as cursor:
+        temp_admins_count = int((await cursor.fetchone())[0] or 0)
+
+    return {
+        "users_with_tickets_count": users_with_tickets_count,
+        "total_tickets": total_tickets,
+        "winners_count": winners_count,
+        "casino_spins_count": casino_spins_count,
+        "channels_count": channels_count,
+        "promocodes_count": promocodes_count,
+        "active_temp_admins_count": active_temp_admins_count,
+        "temp_admins_count": temp_admins_count,
+    }
+
+
+async def get_contest_reset_preview() -> dict[str, int | float]:
+    """Получить preview-счётчики owner reset без изменения БД."""
+    db = await get_db()
+    return await _collect_contest_reset_preview(db)
+
+
+async def reset_contest_with_archive(actor_id: int) -> dict[str, int | float]:
+    """
+    Архивировать состояние конкурса и выполнить reset в одной транзакции.
+
+    Не удаляет users/settings/referrals/user_flags/admin_audit_log.
+    """
+    db = await get_db()
+    await db.execute("BEGIN IMMEDIATE")
+
+    try:
+        preview = await _collect_contest_reset_preview(db)
+
+        cursor = await db.execute(
+            """
+            INSERT INTO contest_reset_runs (
+                actor_id,
+                users_with_tickets_count,
+                total_tickets,
+                winners_count,
+                casino_spins_count,
+                channels_count,
+                promocodes_count,
+                active_temp_admins_count,
+                temp_admins_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                actor_id,
+                preview["users_with_tickets_count"],
+                preview["total_tickets"],
+                preview["winners_count"],
+                preview["casino_spins_count"],
+                preview["channels_count"],
+                preview["promocodes_count"],
+                preview["active_temp_admins_count"],
+                preview["temp_admins_count"],
+            ),
+        )
+        reset_id = int(cursor.lastrowid)
+
+        await db.execute(
+            """
+            INSERT INTO contest_reset_user_tickets (
+                reset_id,
+                user_id,
+                username,
+                first_name,
+                last_name,
+                language_code,
+                is_premium,
+                ref_link,
+                ref_by,
+                tickets,
+                registered_at,
+                last_check_at,
+                blocked_bot
+            )
+            SELECT
+                ?,
+                id,
+                username,
+                first_name,
+                last_name,
+                language_code,
+                is_premium,
+                ref_link,
+                ref_by,
+                tickets,
+                registered_at,
+                last_check_at,
+                blocked_bot
+            FROM users
+            WHERE tickets != 0
+            """,
+            (reset_id,),
+        )
+        await db.execute(
+            """
+            INSERT INTO contest_reset_winners (reset_id, original_id, user_id, prize, draw_date)
+            SELECT ?, id, user_id, prize, draw_date
+            FROM winners
+            """,
+            (reset_id,),
+        )
+        await db.execute(
+            """
+            INSERT INTO contest_reset_casino_spins (
+                reset_id,
+                original_id,
+                user_id,
+                bet_amount,
+                dice_value,
+                result_type,
+                multiplier,
+                balance_before,
+                balance_after,
+                created_at
+            )
+            SELECT
+                ?,
+                id,
+                user_id,
+                bet_amount,
+                dice_value,
+                result_type,
+                multiplier,
+                balance_before,
+                balance_after,
+                created_at
+            FROM casino_spins
+            """,
+            (reset_id,),
+        )
+        await db.execute(
+            """
+            INSERT INTO contest_reset_channels (reset_id, original_id, channel_id, title, invite_link)
+            SELECT ?, id, channel_id, title, invite_link
+            FROM channels
+            """,
+            (reset_id,),
+        )
+        await db.execute(
+            """
+            INSERT INTO contest_reset_promocodes (
+                reset_id,
+                original_id,
+                code,
+                channel_id,
+                used_by,
+                activated_at
+            )
+            SELECT ?, id, code, channel_id, used_by, activated_at
+            FROM promocodes
+            """,
+            (reset_id,),
+        )
+        await db.execute(
+            """
+            INSERT INTO contest_reset_temporary_admins (
+                reset_id,
+                user_id,
+                username,
+                first_name,
+                added_by,
+                created_at,
+                revoked_at
+            )
+            SELECT ?, user_id, username, first_name, added_by, created_at, revoked_at
+            FROM temporary_admins
+            """,
+            (reset_id,),
+        )
+
+        await db.execute("UPDATE users SET tickets = 0, last_check_at = NULL")
+        await db.execute("DELETE FROM winners")
+        await db.execute("DELETE FROM casino_spins")
+        await db.execute("DELETE FROM channels")
+        await db.execute("DELETE FROM promocodes")
+        await db.execute("DELETE FROM temporary_admins")
+
+        await db.commit()
+        return {"reset_id": reset_id, **preview}
+    except Exception:
+        await db.rollback()
+        raise
+
+
+async def get_contest_reset_runs(limit: int = 10) -> list[aiosqlite.Row]:
+    """Получить последние owner reset runs."""
+    db = await get_db()
+    async with db.execute(
+        """
+        SELECT *
+        FROM contest_reset_runs
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ) as cursor:
+        return await cursor.fetchall()
 
 
 # ════════════════════════════════════════════════════════════

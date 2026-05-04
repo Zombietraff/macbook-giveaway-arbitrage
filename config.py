@@ -23,7 +23,9 @@ LOGS_DIR: Final[Path] = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 
 # ──────────────────── Загрузка .env ────────────────────
-load_dotenv(BASE_DIR / ".env")
+# Для локального Pinggy-тестирования WEBAPP_URL часто меняется.
+# override=True защищает от устаревшего WEBAPP_URL, экспортированного в shell.
+load_dotenv(BASE_DIR / ".env", override=True)
 
 
 def _require_env(key: str) -> str:
@@ -34,16 +36,31 @@ def _require_env(key: str) -> str:
     return value
 
 
+def _parse_int_list(raw_value: str) -> list[int]:
+    """Распарсить comma-separated список Telegram ID."""
+    return [
+        int(uid.strip())
+        for uid in raw_value.split(",")
+        if uid.strip()
+    ]
+
+
 # ──────────────────── Telegram ────────────────────
 BOT_TOKEN: Final[str] = _require_env("BOT_TOKEN")
 BOT_USERNAME: Final[str] = os.getenv("BOT_USERNAME", "ContestBot")
+WEBAPP_URL: Final[str] = os.getenv("WEBAPP_URL", "https://your-domain.com")
+MAX_USER_ID: Final[int] = int(os.getenv("MAX_USER_ID", "8000000000"))
 
 # ──────────────────── Администраторы ────────────────────
-ADMIN_IDS: Final[list[int]] = [
-    int(uid.strip())
-    for uid in _require_env("ADMIN_IDS").split(",")
-    if uid.strip()
-]
+_owner_ids_raw = os.getenv("OWNER_IDS") or os.getenv("ADMIN_IDS")
+if not _owner_ids_raw:
+    raise RuntimeError("Переменная окружения 'OWNER_IDS' обязательна. Проверьте .env файл.")
+
+OWNER_IDS: Final[list[int]] = _parse_int_list(_owner_ids_raw)
+
+# Deprecated compatibility alias. Runtime-права проверяются через OWNER_IDS
+# и temporary_admins в БД, а не через ADMIN_IDS.
+ADMIN_IDS: Final[list[int]] = OWNER_IDS
 
 BLACKLIST_LANG: Final[frozenset[str]] = frozenset({
     "ar", "fa", "hi", "ur", "bn", "th", "vi", "zh", "ja", "ko",

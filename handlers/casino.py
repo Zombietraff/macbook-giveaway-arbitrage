@@ -188,6 +188,9 @@ async def _show_bet_picker(
     )
 
 
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from utils.plugins import get_active_webapp_url
+
 @router.message(F.text == "🎰 Запустить кампанию")
 async def start_casino(
     message: Message,
@@ -199,10 +202,6 @@ async def start_casino(
 ) -> None:
     """Точка входа в модуль казино из главного меню."""
     user_id = message.from_user.id
-
-    if user_id in _spinning_users:
-        await message.answer(i18n("casino_busy"))
-        return
 
     db_user = await get_user(user_id)
     if not db_user:
@@ -216,15 +215,13 @@ async def start_casino(
         return
 
     await state.clear()
-
-    if not await has_user_flag(user_id, _CASINO_FLAG_DISCLAIMER):
-        await message.answer(
-            i18n("casino_disclaimer"),
-            reply_markup=get_casino_disclaimer_keyboard(lang),
-        )
-        return
-
-    await _show_bet_picker(message, user_id, balance, lang, i18n, state)
+    
+    # Отправляем кнопку Web App
+    webapp_url = await get_active_webapp_url()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎰 Играть сейчас", web_app=WebAppInfo(url=webapp_url))]
+    ])
+    await message.answer("Запускай кампанию через наше Web App прилажение!", reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "casino_accept_disclaimer")

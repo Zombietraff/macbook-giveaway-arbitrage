@@ -111,6 +111,136 @@ CREATE TABLE IF NOT EXISTS user_flags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_flags_lookup ON user_flags(user_id, flag);
+
+-- temporary_admins: временные админы арендаторов/конкурсов
+CREATE TABLE IF NOT EXISTS temporary_admins (
+    user_id    INTEGER PRIMARY KEY,
+    username   TEXT,
+    first_name TEXT,
+    added_by   INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_temporary_admins_active ON temporary_admins(revoked_at);
+
+-- admin_audit_log: аудит действий owner/temp admin
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id   INTEGER NOT NULL,
+    action     TEXT NOT NULL,
+    target_id  INTEGER,
+    payload    TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_actor ON admin_audit_log(actor_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action, created_at);
+
+-- contest_reset_runs: история owner-сбросов конкурса
+CREATE TABLE IF NOT EXISTS contest_reset_runs (
+    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id                   INTEGER NOT NULL,
+    created_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    users_with_tickets_count   INTEGER NOT NULL DEFAULT 0,
+    total_tickets              REAL    NOT NULL DEFAULT 0.0,
+    winners_count              INTEGER NOT NULL DEFAULT 0,
+    casino_spins_count         INTEGER NOT NULL DEFAULT 0,
+    channels_count             INTEGER NOT NULL DEFAULT 0,
+    promocodes_count           INTEGER NOT NULL DEFAULT 0,
+    active_temp_admins_count   INTEGER NOT NULL DEFAULT 0,
+    temp_admins_count          INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_runs_created ON contest_reset_runs(created_at);
+
+-- contest_reset_user_tickets: архив балансов пользователей перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_user_tickets (
+    reset_id      INTEGER NOT NULL,
+    user_id       INTEGER NOT NULL,
+    username      TEXT,
+    first_name    TEXT,
+    last_name     TEXT,
+    language_code TEXT,
+    is_premium    BOOLEAN,
+    ref_link      TEXT,
+    ref_by        INTEGER,
+    tickets       REAL,
+    registered_at TIMESTAMP,
+    last_check_at TIMESTAMP,
+    blocked_bot   BOOLEAN,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_user_tickets_reset ON contest_reset_user_tickets(reset_id);
+
+-- contest_reset_winners: архив winners перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_winners (
+    reset_id    INTEGER NOT NULL,
+    original_id INTEGER NOT NULL,
+    user_id     INTEGER,
+    prize       TEXT,
+    draw_date   TIMESTAMP,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_winners_reset ON contest_reset_winners(reset_id);
+
+-- contest_reset_casino_spins: архив casino_spins перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_casino_spins (
+    reset_id       INTEGER NOT NULL,
+    original_id    INTEGER NOT NULL,
+    user_id        INTEGER NOT NULL,
+    bet_amount     REAL NOT NULL,
+    dice_value     INTEGER NOT NULL,
+    result_type    TEXT,
+    multiplier     REAL NOT NULL,
+    balance_before REAL NOT NULL,
+    balance_after  REAL NOT NULL,
+    created_at     TIMESTAMP,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_casino_spins_reset ON contest_reset_casino_spins(reset_id);
+
+-- contest_reset_channels: архив channels перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_channels (
+    reset_id    INTEGER NOT NULL,
+    original_id INTEGER NOT NULL,
+    channel_id  TEXT,
+    title       TEXT,
+    invite_link TEXT,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_channels_reset ON contest_reset_channels(reset_id);
+
+-- contest_reset_promocodes: архив promocodes перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_promocodes (
+    reset_id     INTEGER NOT NULL,
+    original_id  INTEGER NOT NULL,
+    code         TEXT,
+    channel_id   INTEGER,
+    used_by      INTEGER,
+    activated_at TIMESTAMP,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_promocodes_reset ON contest_reset_promocodes(reset_id);
+
+-- contest_reset_temporary_admins: архив temporary_admins перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_temporary_admins (
+    reset_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    username   TEXT,
+    first_name TEXT,
+    added_by   INTEGER NOT NULL,
+    created_at TIMESTAMP,
+    revoked_at TIMESTAMP,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_temporary_admins_reset ON contest_reset_temporary_admins(reset_id);
 """
 
 

@@ -17,7 +17,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 from db.models import activate_promocode, add_user_tickets, get_promocode, get_user
-from keyboards.main_menu import get_cancel_keyboard, get_main_menu_keyboard
+from keyboards.main_menu import get_active_main_menu_keyboard, get_cancel_keyboard
 from utils.checks import check_subscription
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ async def cancel_promo_input(
     await state.clear()
     await message.answer(
         i18n("promo_cancel"),
-        reply_markup=get_main_menu_keyboard(lang),
+        reply_markup=await get_active_main_menu_keyboard(lang),
     )
 
 
@@ -92,7 +92,7 @@ async def process_promo_code(
         await state.clear()
         await message.answer(
             i18n("menu_back"),
-            reply_markup=get_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang),
         )
         return
 
@@ -110,7 +110,7 @@ async def process_promo_code(
         await state.clear()
         await message.answer(
             i18n("menu_back"),
-            reply_markup=get_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang),
         )
         return
 
@@ -125,7 +125,7 @@ async def process_promo_code(
     await state.clear()
     await message.answer(
         i18n("promo_success", total=int(total)),
-        reply_markup=get_main_menu_keyboard(lang),
+        reply_markup=await get_active_main_menu_keyboard(lang),
     )
 
     logger.info(

@@ -14,7 +14,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
 from db.models import get_user, update_user_language
-from keyboards.main_menu import get_language_keyboard, get_main_menu_keyboard
+from keyboards.main_menu import get_active_main_menu_keyboard, get_language_keyboard
 from middlewares.localization import get_text
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ async def change_language(callback: CallbackQuery, lang: str, i18n: Callable, **
     # Обновляем главное меню с новым языком
     await callback.message.answer(
         get_text("menu_back", new_lang),
-        reply_markup=get_main_menu_keyboard(new_lang),
+        reply_markup=await get_active_main_menu_keyboard(new_lang),
     )
 
     logger.info("Пользователь %d сменил язык: %s → %s", user_id, lang, new_lang)

@@ -31,6 +31,9 @@ _ALLOWED_AFTER_END = frozenset({
 # Админ-команды, всегда разрешены (даже после окончания)
 _ADMIN_COMMANDS = frozenset({
     "/draw", "/admin_stats", "/casino_stats", "/refresh_menu", "/send", "/set_date", "/start",
+    "/admin_menu", "/owner_menu", "/add_admin", "/remove_admin", "/list_admins",
+    "/add_channel", "/remove_channel", "/list_channels", "/add_promocode", "/add_promocodes",
+    "/list_plugins", "/set_plugin", "/webapp_url", "/reset_contest", "/reset_history",
 })
 
 
@@ -50,10 +53,10 @@ async def is_contest_active() -> bool:
     return now < end_date
 
 
-def _is_admin(user_id: int) -> bool:
+async def _is_admin(user_id: int) -> bool:
     """Проверить, является ли пользователь администратором."""
-    from config import ADMIN_IDS
-    return user_id in ADMIN_IDS
+    from utils.admin_access import is_admin
+    return await is_admin(user_id)
 
 
 class ContestActiveMiddleware(BaseMiddleware):
@@ -87,7 +90,7 @@ class ContestActiveMiddleware(BaseMiddleware):
         # Проверка админ-команд (могут иметь аргументы: /extend_date 2026-12-31 23:59)
         cmd = text.split()[0] if text else ""
         cmd = cmd.split("@")[0]  # отрезаем @Username если есть
-        if cmd in _ADMIN_COMMANDS and _is_admin(event.from_user.id):
+        if cmd in _ADMIN_COMMANDS and await _is_admin(event.from_user.id):
             return await handler(event, data)
 
         # Блокируем

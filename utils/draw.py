@@ -2,7 +2,7 @@
 Скрипт розыгрыша — выбор победителей взвешенным рандомом.
 
 Логика:
-1. Выбрать активных участников (tickets > 0, blocked_bot=False).
+1. Выбрать кандидатов (tickets > 0, blocked_bot=False) и live-проверить подписку.
 2. Взвешенный рандом: random.choices с весами = tickets.
 3. 4 уникальных победителя: первые 3 → MacBook Neo, 4-й → AirPods 3 Pro.
 4. Попытка отправки сообщения; при ошибке → исключить и пересчитать.
@@ -14,14 +14,13 @@ from __future__ import annotations
 import logging
 import random
 from datetime import datetime
-from pathlib import Path
-from typing import Optional
 
 from aiogram import Bot
 
 from config import LOGS_DIR
 from db.database import get_db
-from db.models import add_winner, get_user
+from db.models import add_winner
+from utils.checks import check_subscription
 from utils.notifications import notify_winner
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,7 @@ async def _get_eligible_users(bot: Bot) -> list[dict]:
     """
     Получить список подходящих участников.
 
-    Критерии: tickets > 0, blocked_bot = False.
+    Критерии: tickets > 0, blocked_bot = False, подписан на текущие channels.
     """
     db = await get_db()
     async with db.execute(
@@ -56,8 +55,26 @@ async def _get_eligible_users(bot: Bot) -> list[dict]:
     ) as cursor:
         rows = await cursor.fetchall()
 
+    _log_draw(f"Кандидатов с tickets и без blocked_bot: {len(rows)}")
+
     users = []
+    unsubscribed_count = 0
     for row in rows:
+        try:
+            subscribed, unsubscribed = await check_subscription(bot, int(row["id"]))
+        except Exception as exc:
+            subscribed = False
+            unsubscribed = []
+            _log_draw(f"Ошибка live subscription check user={row['id']}: {exc}")
+
+        if not subscribed:
+            unsubscribed_count += 1
+            channel_ids = [str(ch.get("channel_id")) for ch in unsubscribed]
+            _log_draw(
+                f"Исключён user={row['id']}: нет подписки на текущие channels {channel_ids}"
+            )
+            continue
+
         users.append({
             "id": row["id"],
             "username": row["username"],
@@ -66,6 +83,9 @@ async def _get_eligible_users(bot: Bot) -> list[dict]:
             "language_code": row["language_code"],
         })
 
+    _log_draw(
+        f"Live subscription eligibility: passed={len(users)}, excluded={unsubscribed_count}"
+    )
     return users
 
 

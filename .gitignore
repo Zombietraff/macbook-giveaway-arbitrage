@@ -1,6 +1,9 @@
 # Environment
 .env
 .venv/
+node_modules/
+plagins/cherry-charm/node_modules/
+plagins/cherry-charm/dist/
 
 # Database
 *.db
@@ -16,6 +19,7 @@ dist/
 build/
 
 # Logs
+*.log
 logs/*.log
 
 # IDE

@@ -31,9 +31,9 @@ from db.models import (
     get_user_by_ref_link,
 )
 from keyboards.channels import get_channels_keyboard
-from keyboards.main_menu import get_check_subscription_keyboard, get_main_menu_keyboard
+from keyboards.main_menu import get_active_main_menu_keyboard, get_check_subscription_keyboard
 from middlewares.localization import detect_language, get_text
-from utils.checks import is_valid_language
+from utils.checks import is_valid_language, is_valid_user_id
 
 logger = logging.getLogger(__name__)
 router = Router(name="start")
@@ -88,7 +88,7 @@ async def cmd_start(
                     first_name=user.first_name or "User",
                     tickets=int(tickets),
                 ),
-                reply_markup=get_main_menu_keyboard(lang),
+                reply_markup=await get_active_main_menu_keyboard(lang),
             )
         else:
             # Зарегистрирован, но ещё не прошёл проверку подписки
@@ -112,6 +112,12 @@ async def cmd_start(
             user_id, user.language_code,
         )
         await message.answer(i18n("blocked_language"))
+        return
+
+    # ──────────────────── Анти-бот фильтр: ID ────────────────────
+    if not is_valid_user_id(user_id):
+        logger.warning("Блокировка по user_id: user=%d", user_id)
+        await message.answer(i18n("blocked_user_id"))
         return
 
     # ──────────────────── Обработка deep link (реферал) ────────────────────

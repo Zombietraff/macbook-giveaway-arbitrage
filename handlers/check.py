@@ -79,11 +79,11 @@ async def check_subscription_handler(
     if tickets > 0:
         # Повторная проверка — просто обновляем last_check_at
         from db.models import update_last_check
-        from keyboards.main_menu import get_main_menu_keyboard
+        from keyboards.main_menu import get_active_main_menu_keyboard
         await update_last_check(user_id)
         await callback.message.answer(
             i18n("check_already", tickets=int(tickets)),
-            reply_markup=get_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang),
         )
         logger.info("Повторная проверка user=%d, tickets=%.1f", user_id, tickets)
     else:
@@ -99,10 +99,10 @@ async def check_subscription_handler(
         await _process_pending_referral(bot, user_id, i18n, lang)
 
         # Показываем успех + главное меню
-        from keyboards.main_menu import get_main_menu_keyboard
+        from keyboards.main_menu import get_active_main_menu_keyboard
         await callback.message.answer(
             i18n("check_success", tickets=int(base_tickets)),
-            reply_markup=get_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang),
         )
         logger.info(
             "Первая проверка user=%d: начислено %.1f билетов (premium=%s)",

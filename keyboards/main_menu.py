@@ -12,12 +12,15 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 
+import config
 from middlewares.localization import get_text
+from utils.plugins import get_active_webapp_url
 
 
-def get_main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+def get_main_menu_keyboard(lang: str = "ru", webapp_url: str | None = None) -> ReplyKeyboardMarkup:
     """
     Главное меню участника (Reply-клавиатура).
 
@@ -30,7 +33,10 @@ def get_main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text=get_text("menu_casino", lang)),
+                KeyboardButton(
+                    text=get_text("menu_casino", lang),
+                    web_app=WebAppInfo(url=webapp_url or config.WEBAPP_URL)
+                ),
             ],
             [
                 KeyboardButton(text=get_text("menu_invite", lang)),
@@ -48,6 +54,11 @@ def get_main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         is_persistent=True,
     )
+
+
+async def get_active_main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+    """Главное меню с URL активной мини-игры из settings.active_plugin_key."""
+    return get_main_menu_keyboard(lang, webapp_url=await get_active_webapp_url())
 
 
 def get_check_subscription_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
