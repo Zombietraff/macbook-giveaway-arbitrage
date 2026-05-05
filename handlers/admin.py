@@ -75,6 +75,9 @@ _RESET_CANCEL_PREFIX = "reset_contest:cancel:"
 class AdminSendState(StatesGroup):
     """FSM-состояние для подтверждения админ-рассылки /send."""
 
+    waiting_message = State()
+    waiting_button_choice = State()
+    waiting_button_text = State()
     waiting_confirm = State()
 
 
@@ -251,17 +254,24 @@ _ADMIN_MENU_HELP = {
 }
 
 
-def _extract_send_payload(message: Message) -> tuple[str, list[MessageEntity]]:
-    """Извлечь текст после /send и сохранить исходные форматирующие entities."""
-    text = message.text or ""
+def _extract_send_payload(message: Message) -> tuple[str, list[MessageEntity], str | None]:
+    """Извлечь текст после /send, сохранить исходные форматирующие entities и photo_file_id."""
+    text = message.text or message.caption or ""
+    photo_file_id = message.photo[-1].file_id if message.photo else None
     if not text:
-        return "", []
+        return "", [], photo_file_id
 
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
-        return "", []
+        return "", [], photo_file_id
 
     command_token = parts[0]
+    # Check if the command is exactly /send (in case of caption without command)
+    if not command_token.startswith("/send"):
+        # If it's a message in waiting_message state, it might not have /send.
+        # But this function is only called on the initial message with /send.
+        pass
+
     payload_start = len(command_token)
     while payload_start < len(text) and text[payload_start].isspace():
         payload_start += 1
@@ -269,7 +279,10 @@ def _extract_send_payload(message: Message) -> tuple[str, list[MessageEntity]]:
     payload_text = text[payload_start:]
     payload_entities: list[MessageEntity] = []
 
-    for entity in message.entities or []:
+    # get entities or caption_entities
+    entities = message.entities or message.caption_entities or []
+
+    for entity in entities:
         entity_start = entity.offset
         entity_end = entity.offset + entity.length
 
@@ -285,7 +298,7 @@ def _extract_send_payload(message: Message) -> tuple[str, list[MessageEntity]]:
             entity.model_copy(update={"offset": entity_start - payload_start})
         )
 
-    return payload_text, payload_entities
+    return payload_text, payload_entities, photo_file_id
 
 
 def _format_reset_preview(preview: dict[str, int | float]) -> str:
@@ -1068,40 +1081,145 @@ async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
 
 
 @router.message(Command("send"))
-async def send_preview(
+async def send_cmd(
     message: Message,
     state: FSMContext,
     **kwargs: Any,
 ) -> None:
-    """Подготовить предпросмотр админ-рассылки перед отправкой всем пользователям."""
+    """Начать процесс рассылки: запросить сообщение или сразу спросить про кнопку."""
     if not await _is_admin(message.from_user.id):
         return
 
-    send_text, send_entities = _extract_send_payload(message)
-    if not send_text.strip():
-        await message.answer("⚠️ Формат: <code>/send текст сообщения</code>")
+    send_text, send_entities, photo_file_id = _extract_send_payload(message)
+    
+    if not send_text.strip() and not photo_file_id:
+        await state.set_state(AdminSendState.waiting_message)
+        await message.answer(
+            "Отправьте сообщение (текст или фото с подписью), которое нужно разослать всем участникам.\n"
+            "Для отмены используйте /cancel."
+        )
         return
 
     if len(send_text) > 4096:
         await message.answer("❌ Сообщение слишком длинное. Максимум: 4096 символов.")
         return
 
-    await state.set_state(AdminSendState.waiting_confirm)
+    await _proceed_to_button_choice(message, state, send_text, send_entities, photo_file_id)
+
+@router.message(AdminSendState.waiting_message, Command("cancel"))
+async def send_cancel_wait(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    if not await _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await message.answer("❌ Рассылка отменена.")
+
+@router.message(AdminSendState.waiting_message)
+async def send_message_received(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    if not await _is_admin(message.from_user.id):
+        return
+    
+    text = message.text or message.caption or ""
+    photo_file_id = message.photo[-1].file_id if message.photo else None
+    entities = message.entities or message.caption_entities or []
+    
+    if not text.strip() and not photo_file_id:
+        await message.answer("Пожалуйста, отправьте текст или фото. Для отмены используйте /cancel.")
+        return
+        
+    await _proceed_to_button_choice(message, state, text, entities, photo_file_id)
+
+async def _proceed_to_button_choice(
+    message: Message, 
+    state: FSMContext, 
+    send_text: str, 
+    send_entities: list[MessageEntity], 
+    photo_file_id: str | None
+) -> None:
+    await state.set_state(AdminSendState.waiting_button_choice)
     await state.update_data(
         send_text=send_text,
         send_entities=[entity.model_dump(mode="json") for entity in send_entities],
+        photo_file_id=photo_file_id
     )
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить кнопку", callback_data="btn_add")],
+        [InlineKeyboardButton(text="⏭ Без кнопки", callback_data="btn_skip")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="btn_cancel")],
+    ])
+    await message.answer("Хотите добавить инлайн-кнопку со ссылкой на старт бота?", reply_markup=markup)
+
+@router.callback_query(AdminSendState.waiting_button_choice, F.data == "btn_cancel")
+async def btn_cancel_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Рассылка отменена.")
+    await callback.answer()
+
+@router.callback_query(AdminSendState.waiting_button_choice, F.data == "btn_skip")
+async def btn_skip_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _show_send_preview(callback.message, state, None)
+
+@router.callback_query(AdminSendState.waiting_button_choice, F.data == "btn_add")
+async def btn_add_callback(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminSendState.waiting_button_text)
+    await callback.message.edit_text("✏️ Введите текст для инлайн-кнопки (например, \"Забрать PS5\"):")
+    await callback.answer()
+
+@router.message(AdminSendState.waiting_button_text, Command("cancel"))
+async def btn_text_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Рассылка отменена.")
+
+@router.message(AdminSendState.waiting_button_text)
+async def btn_text_received(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if not text:
+        return
+    await _show_send_preview(message, state, text)
+
+async def _show_send_preview(message: Message, state: FSMContext, button_text: str | None):
+    data = await state.get_data()
+    send_text = data.get("send_text") or ""
+    raw_entities = data.get("send_entities") or []
+    send_entities = [MessageEntity(**item) for item in raw_entities]
+    photo_file_id = data.get("photo_file_id")
+    
+    if button_text:
+        await state.update_data(button_text=button_text)
+
+    await state.set_state(AdminSendState.waiting_confirm)
+    
+    kb_preview = None
+    if button_text:
+        bot_link = f"https://t.me/{config.BOT_USERNAME}?start=broadcast"
+        kb_preview = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=button_text, url=bot_link)],
+            [
+                InlineKeyboardButton(text="✅ Отправить", callback_data=_SEND_CONFIRM_DATA),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=_SEND_CANCEL_DATA),
+            ]
+        ])
+    else:
+        kb_preview = _get_send_preview_keyboard()
 
     await message.answer("📣 <b>Предпросмотр рассылки</b>")
-    await message.answer(
-        send_text,
-        entities=send_entities,
-        parse_mode=None,
-    )
-    await message.answer(
-        "Отправить это сообщение всем пользователям?",
-        reply_markup=_get_send_preview_keyboard(),
-    )
+    if photo_file_id:
+        await message.answer_photo(
+            photo=photo_file_id,
+            caption=send_text,
+            caption_entities=send_entities,
+            reply_markup=kb_preview
+        )
+    else:
+        await message.answer(
+            send_text,
+            entities=send_entities,
+            parse_mode=None,
+            reply_markup=kb_preview
+        )
+    
     _log_admin_action(message.from_user.id, f"send_preview: len={len(send_text)}")
 
 
@@ -1146,8 +1264,10 @@ async def send_confirm(
     send_text = data.get("send_text") or ""
     raw_entities = data.get("send_entities") or []
     send_entities = [MessageEntity(**item) for item in raw_entities]
+    photo_file_id = data.get("photo_file_id")
+    button_text = data.get("button_text")
 
-    if current_state != AdminSendState.waiting_confirm.state or not send_text.strip():
+    if current_state != AdminSendState.waiting_confirm.state or (not send_text.strip() and not photo_file_id):
         await callback.answer("⚠️ Нет активной рассылки для подтверждения.", show_alert=True)
         await state.clear()
         return
@@ -1158,6 +1278,11 @@ async def send_confirm(
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
+
+    reply_markup = None
+    if button_text:
+        bot_link = f"https://t.me/{config.BOT_USERNAME}?start=broadcast"
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=button_text, url=bot_link)]])
 
     db = await get_db()
     async with db.execute("SELECT id FROM users") as cursor:
@@ -1175,12 +1300,22 @@ async def send_confirm(
         user_id = int(user["id"])
 
         try:
-            await bot.send_message(
-                chat_id=user_id,
-                text=send_text,
-                entities=send_entities,
-                parse_mode=None,
-            )
+            if photo_file_id:
+                await bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo_file_id,
+                    caption=send_text,
+                    caption_entities=send_entities,
+                    reply_markup=reply_markup
+                )
+            else:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=send_text,
+                    entities=send_entities,
+                    parse_mode=None,
+                    reply_markup=reply_markup
+                )
             sent += 1
         except TelegramForbiddenError:
             blocked += 1
