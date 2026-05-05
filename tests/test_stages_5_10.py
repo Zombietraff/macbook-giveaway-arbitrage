@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
@@ -575,6 +576,61 @@ class TestAdminFunctions(unittest.TestCase):
             _parse_prize_lines("Prize without quantity")
         with self.assertRaises(ValueError):
             _parse_prize_lines("0 | Prize")
+
+    def test_set_prizes_cancel_clears_state(self) -> None:
+        """Команда /cancel выводит админа из FSM-ввода призов."""
+        async def _run() -> None:
+            from handlers.admin import admin_set_prizes_cancel
+
+            message = SimpleNamespace(
+                from_user=SimpleNamespace(id=111),
+                answer=AsyncMock(),
+            )
+            state = AsyncMock()
+
+            with (
+                patch("handlers.admin._is_admin", new=AsyncMock(return_value=True)),
+                patch("handlers.admin._log_admin_action"),
+            ):
+                await admin_set_prizes_cancel(message, state)
+
+            state.clear.assert_awaited_once()
+            message.answer.assert_awaited_once_with("❌ Настройка призов отменена.")
+
+        asyncio.run(_run())
+
+    def test_set_prizes_state_slash_command_does_not_parse_prizes(self) -> None:
+        """Slash-команды в FSM-вводе призов отменяют режим, а не попадают в парсер."""
+        async def _run() -> None:
+            from handlers.admin import admin_set_prizes_command_during_input
+
+            message = SimpleNamespace(
+                from_user=SimpleNamespace(id=111),
+                text="/list_prizes",
+                answer=AsyncMock(),
+            )
+            state = AsyncMock()
+
+            with (
+                patch("handlers.admin._is_admin", new=AsyncMock(return_value=True)),
+                patch("handlers.admin._parse_prize_lines") as parse_prize_lines,
+                patch("handlers.admin._log_admin_action"),
+            ):
+                await admin_set_prizes_command_during_input(message, state)
+
+            state.clear.assert_awaited_once()
+            parse_prize_lines.assert_not_called()
+            message.answer.assert_awaited_once_with(
+                "❌ Настройка призов отменена. Команда не была выполнена, отправьте её ещё раз."
+            )
+
+        asyncio.run(_run())
+
+    def test_cancel_is_allowed_after_contest_end(self) -> None:
+        """Middleware не должен блокировать /cancel, иначе FSM нельзя сбросить после END_DATE."""
+        from middlewares.contest_active import _ADMIN_COMMANDS
+
+        self.assertIn("/cancel", _ADMIN_COMMANDS)
 
     def test_admin_id_check(self) -> None:
         """Проверка ID администратора."""

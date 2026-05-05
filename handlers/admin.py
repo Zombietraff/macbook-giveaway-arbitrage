@@ -572,6 +572,40 @@ async def admin_set_prizes_start(
     _log_admin_action(message.from_user.id, "set_prizes_started")
 
 
+@router.message(AdminPrizeState.waiting_prizes, Command("cancel"))
+async def admin_set_prizes_cancel(
+    message: Message,
+    state: FSMContext,
+    **kwargs: Any,
+) -> None:
+    """Отменить многострочный ввод призов."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer("❌ Настройка призов отменена.")
+    _log_admin_action(message.from_user.id, "set_prizes_cancelled")
+
+
+@router.message(AdminPrizeState.waiting_prizes, F.text.startswith("/"))
+async def admin_set_prizes_command_during_input(
+    message: Message,
+    state: FSMContext,
+    **kwargs: Any,
+) -> None:
+    """Не парсить slash-команды как строки призов."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(
+        "❌ Настройка призов отменена. Команда не была выполнена, отправьте её ещё раз."
+    )
+    _log_admin_action(message.from_user.id, "set_prizes_cancelled_by_command")
+
+
 @router.message(AdminPrizeState.waiting_prizes)
 async def admin_set_prizes_receive(
     message: Message,
