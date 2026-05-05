@@ -19,7 +19,6 @@ import aiosqlite
 _TEST_ENV = {
     "BOT_TOKEN": "123456:TEST_TOKEN_FOR_TESTS",
     "ADMIN_IDS": "111,222",
-    "MAX_USER_ID": "8000000000",
     "BOT_USERNAME": "TestContestBot",
 }
 for k, v in _TEST_ENV.items():

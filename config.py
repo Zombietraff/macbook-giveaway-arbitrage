@@ -62,7 +62,6 @@ def _path_env(key: str, default: str) -> Path:
 BOT_TOKEN: Final[str] = _require_env("BOT_TOKEN")
 BOT_USERNAME: Final[str] = os.getenv("BOT_USERNAME", "ContestBot")
 WEBAPP_URL: Final[str] = os.getenv("WEBAPP_URL", "https://your-domain.com")
-MAX_USER_ID: Final[int] = int(os.getenv("MAX_USER_ID", "8000000000"))
 
 # ──────────────────── Hidden userbot trust check ────────────────────
 TELEGRAM_API_ID: Final[int | None] = _optional_int_env("TELEGRAM_API_ID")

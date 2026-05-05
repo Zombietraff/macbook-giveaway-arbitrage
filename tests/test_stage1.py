@@ -27,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _TEST_ENV = {
     "BOT_TOKEN": "123456:TEST_TOKEN_FOR_TESTS",
     "ADMIN_IDS": "111,222",
-    "MAX_USER_ID": "8000000000",
     "BOT_USERNAME": "TestContestBot",
 }
 

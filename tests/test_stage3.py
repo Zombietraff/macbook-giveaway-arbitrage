@@ -3,7 +3,7 @@
 
 Проверяет:
 1. Валидация языка (чёрный список).
-2. Валидация user ID (порог).
+2. Регистрация без фильтра по Telegram user_id.
 3. Генерация ref_link.
 4. Извлечение ref_code из deep link.
 5. CRUD: регистрация пользователя + реферал.
@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
 
@@ -25,7 +26,6 @@ _TEST_ENV = {
     "BOT_TOKEN": "123456:TEST_TOKEN_FOR_TESTS",
     "ADMIN_IDS": "111,222",
     "END_DATE": "2026-12-31 23:59",
-    "MAX_USER_ID": "8000000000",
     "BOT_USERNAME": "TestContestBot",
 }
 for k, v in _TEST_ENV.items():
@@ -67,23 +67,6 @@ class TestLanguageValidation(unittest.TestCase):
         self.assertFalse(is_valid_language("zh-TW"))
         self.assertFalse(is_valid_language("ar-SA"))
         self.assertFalse(is_valid_language("ja-JP"))
-
-
-class TestUserIdValidation(unittest.TestCase):
-    """Тесты валидации user ID."""
-
-    def test_valid_user_ids(self) -> None:
-        """ID ниже порога проходят."""
-        from utils.checks import is_valid_user_id
-        self.assertTrue(is_valid_user_id(123456))
-        self.assertTrue(is_valid_user_id(746422763))
-        self.assertTrue(is_valid_user_id(8000000000))  # ровно порог
-
-    def test_invalid_user_ids(self) -> None:
-        """ID выше порога блокируются."""
-        from utils.checks import is_valid_user_id
-        self.assertFalse(is_valid_user_id(8000000001))
-        self.assertFalse(is_valid_user_id(9999999999))
 
 
 class TestRefLinkGeneration(unittest.TestCase):
@@ -244,6 +227,61 @@ class TestRegistrationFlow(unittest.TestCase):
                 self.assertEqual(user["username"], "user1")
                 self.assertEqual(user["language_code"], "ru")
 
+            finally:
+                await conn.close()
+                database_mod._connection = None
+
+        asyncio.run(_run())
+
+    def test_high_telegram_user_id_can_register(self) -> None:
+        """Telegram ID выше старого порога больше не блокируется."""
+        async def _run() -> None:
+            import db.database as database_mod
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            await conn.execute("PRAGMA foreign_keys=ON;")
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                from datetime import datetime
+
+                from aiogram.types import Chat, Message, User
+
+                from db.models import get_user
+                from handlers.start import cmd_start
+
+                high_user_id = 9_999_999_999
+                user = User(
+                    id=high_user_id,
+                    is_bot=False,
+                    first_name="High",
+                    username="high_id_user",
+                    language_code="en",
+                )
+                message = Message(
+                    message_id=1,
+                    date=datetime.now(),
+                    chat=Chat(id=high_user_id, type="private"),
+                    from_user=user,
+                    text="/start",
+                )
+                command = MagicMock()
+                command.args = None
+
+                with patch("aiogram.types.Message.answer", new_callable=AsyncMock):
+                    await cmd_start(
+                        message=message,
+                        command=command,
+                        i18n=lambda key, **kwargs: key,
+                        lang="ru",
+                    )
+
+                db_user = await get_user(high_user_id)
+                self.assertIsNotNone(db_user)
+                self.assertEqual(db_user["id"], high_user_id)
             finally:
                 await conn.close()
                 database_mod._connection = None
