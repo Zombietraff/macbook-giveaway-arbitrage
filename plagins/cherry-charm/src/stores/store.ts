@@ -3,7 +3,8 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import { Fruit } from '../utils/enums';
 import { LanguageCode } from '../i18n';
 
-const STAKE_TIERS = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 500];
+const STAKE_TIERS = [1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 500];
+const MIN_REMAINING_TICKETS = 1;
 
 type State = {
   isMobile: boolean;
@@ -90,7 +91,8 @@ const useGame = create<State>()(
         const nextIndex = currentIndex + direction;
         if (nextIndex < 0 || nextIndex >= STAKE_TIERS.length) return {};
         const newBet = STAKE_TIERS[nextIndex];
-        if (newBet > state.coins && direction > 0) return {};
+        const maxPlayableBet = state.coins - MIN_REMAINING_TICKETS;
+        if (newBet > maxPlayableBet && direction > 0) return {};
         return { bet: newBet };
       });
     },
@@ -101,8 +103,9 @@ const useGame = create<State>()(
      */
     validateBet: () => {
       set((state) => {
-        if (state.bet > state.coins) {
-          const affordableTiers = STAKE_TIERS.filter((t) => t <= state.coins);
+        const maxPlayableBet = state.coins - MIN_REMAINING_TICKETS;
+        if (state.bet > maxPlayableBet) {
+          const affordableTiers = STAKE_TIERS.filter((t) => t <= maxPlayableBet);
           const currentBet =
             affordableTiers.length > 0
               ? affordableTiers[affordableTiers.length - 1]

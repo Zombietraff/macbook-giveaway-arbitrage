@@ -89,6 +89,8 @@ const SlotMachine = forwardRef(({ value }: SlotMachineProps, ref) => {
     if (
       currentState.phase === 'spinning' ||
       currentState.coins < currentState.bet ||
+      currentState.coins <= 1 ||
+      currentState.bet > currentState.coins - 1 ||
       !currentState.disclaimerAccepted
     ) {
       return;

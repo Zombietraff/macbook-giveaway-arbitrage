@@ -75,13 +75,14 @@ async def check_subscription_handler(
         return
 
     # ──────────────────── Все подписки пройдены ────────────────────
-    tickets = db_user["tickets"]
+    tickets = float(db_user["tickets"] or 0.0)
+    has_received_initial_tickets = db_user["last_check_at"] is not None
     await refresh_user_trust_score(
         user_id=user_id,
         username=callback.from_user.username or db_user["username"],
     )
 
-    if tickets > 0:
+    if has_received_initial_tickets:
         # Повторная проверка — просто обновляем last_check_at
         from db.models import update_last_check
         from keyboards.main_menu import get_active_main_menu_keyboard

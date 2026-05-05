@@ -21,10 +21,8 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    MenuButtonWebApp,
     Message,
     MessageEntity,
-    WebAppInfo,
 )
 
 import config
@@ -770,25 +768,18 @@ async def casino_stats(message: Message, **kwargs: Any) -> None:
 
 @router.message(Command("webapp_url"))
 async def webapp_url(message: Message, bot: Bot, **kwargs: Any) -> None:
-    """Показать текущий WEBAPP_URL и переустановить Telegram WebApp menu button."""
+    """Показать текущий WEBAPP_URL и выдать свежую reply-клавиатуру."""
     if not _is_owner(message.from_user.id):
         return
 
     webapp_url_value = await get_active_webapp_url()
-    menu_button = MenuButtonWebApp(
-        text="🎰 Casino",
-        web_app=WebAppInfo(url=webapp_url_value),
-    )
-
-    await bot.set_chat_menu_button(menu_button=menu_button)
-    await bot.set_chat_menu_button(chat_id=message.chat.id, menu_button=menu_button)
 
     await message.answer(
         "🔗 <b>Текущий WEBAPP_URL</b>\n"
         f"<code>{config.WEBAPP_URL}</code>\n\n"
         f"🎮 Активная мини-игра URL:\n<code>{webapp_url_value}</code>\n\n"
-        "✅ WebApp menu button переустановлен для default menu и текущего чата.\n"
-        "Отправьте /start заново, чтобы получить свежую reply-клавиатуру.",
+        "✅ Свежая reply-клавиатура отправлена ниже.\n"
+        "WebApp открывается через кнопку «🎰 Запустить кампанию».",
         reply_markup=await get_active_main_menu_keyboard(kwargs.get("lang", "ru")),
     )
     _log_admin_action(message.from_user.id, f"webapp_url: {webapp_url_value}")

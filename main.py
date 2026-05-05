@@ -74,21 +74,20 @@ async def on_startup(bot: Bot) -> None:
     me = await bot.get_me()
     logger.info("Бот: @%s (ID: %d)", me.username, me.id)
     
-    # Set default Menu button for the bot
-    from aiogram.types import MenuButtonWebApp, WebAppInfo
+    # Keep the default Telegram menu button; WebApp opens from the reply keyboard.
+    from aiogram.types import MenuButtonDefault
     from config import WEBAPP_URL
     from utils.plugins import get_active_plugin_key, get_active_webapp_url
     active_plugin_key = await get_active_plugin_key()
     webapp_url = await get_active_webapp_url()
     logger.info("WEBAPP_URL: %s", WEBAPP_URL)
     logger.info("Active plugin: %s", active_plugin_key)
+    logger.info("Active WebApp URL: %s", webapp_url)
     try:
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="🎰 Casino", web_app=WebAppInfo(url=webapp_url))
-        )
-        logger.info("Default WebApp menu button updated: %s", webapp_url)
+        await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+        logger.info("Default Telegram menu button reset; WebApp reply button remains active.")
     except Exception as e:
-        logger.error(f"Failed to set menu button: {e}")
+        logger.error(f"Failed to reset menu button: {e}")
 
 
 async def on_shutdown(bot: Bot) -> None:

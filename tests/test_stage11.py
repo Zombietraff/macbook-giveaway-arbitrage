@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -29,6 +30,16 @@ for k, v in _TEST_ENV.items():
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.database import _SCHEMA_SQL
+
+
+class _FakeWebAppRequest(dict):
+    def __init__(self, body: dict) -> None:
+        super().__init__()
+        self.headers = {"Authorization": "tma TEST_INIT_DATA"}
+        self._body = body
+
+    async def json(self) -> dict:
+        return self._body
 
 
 class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
@@ -114,6 +125,132 @@ class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
 
         db_user = await get_user(1002)
         self.assertEqual(db_user["tickets"], 1.0)
+
+    async def test_webapp_spin_rejects_spending_last_ticket(self) -> None:
+        """WebApp spin не может списать последний билет."""
+        from api.routes import spin_slot
+        from db.models import get_user, set_user_flag
+
+        await self._create_user_with_tickets(1012, 1.0)
+        await set_user_flag(1012, "webapp_disclaimer_accepted")
+
+        request = _FakeWebAppRequest({"bet": 1})
+
+        with patch("api.routes.validate_init_data", return_value={"id": 1012}):
+            response = await spin_slot(request)
+
+        self.assertEqual(response.status, 400)
+        self.assertIn("Insufficient balance", json.loads(response.text)["error"])
+
+        db_user = await get_user(1012)
+        self.assertEqual(db_user["tickets"], 1.0)
+
+        async with self.conn.execute("SELECT COUNT(*) FROM casino_spins WHERE user_id = ?", (1012,)) as cursor:
+            self.assertEqual((await cursor.fetchone())[0], 0)
+
+    async def test_webapp_spin_balance_2_bet_1_loss_leaves_1_ticket(self) -> None:
+        """WebApp spin при balance=2 и bet=1 может проиграть только до 1 билета."""
+        from api.routes import spin_slot
+        from db.models import get_user, set_user_flag
+
+        await self._create_user_with_tickets(1013, 2.0)
+        await set_user_flag(1013, "webapp_disclaimer_accepted")
+
+        request = _FakeWebAppRequest({"bet": 1})
+
+        with (
+            patch("api.routes.validate_init_data", return_value={"id": 1013}),
+            patch("api.routes.generate_spin_result", return_value=["CHERRY", "APPLE", "BANANA"]),
+        ):
+            response = await spin_slot(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.text)["coins"], 1.0)
+
+        db_user = await get_user(1013)
+        self.assertEqual(db_user["tickets"], 1.0)
+
+    async def test_webapp_spin_balance_2_bet_2_is_rejected(self) -> None:
+        """WebApp spin отклоняет ставку, которая оставила бы 0 билетов."""
+        from api.routes import spin_slot
+        from db.models import get_user, set_user_flag
+
+        await self._create_user_with_tickets(1014, 2.0)
+        await set_user_flag(1014, "webapp_disclaimer_accepted")
+
+        request = _FakeWebAppRequest({"bet": 2})
+
+        with patch("api.routes.validate_init_data", return_value={"id": 1014}):
+            response = await spin_slot(request)
+
+        self.assertEqual(response.status, 400)
+
+        db_user = await get_user(1014)
+        self.assertEqual(db_user["tickets"], 2.0)
+
+    async def test_repeat_subscription_check_with_last_check_does_not_reissue_tickets(self) -> None:
+        """Если last_check_at уже выставлен, повторная проверка не начисляет стартовые билеты даже при 0."""
+        from db.models import get_user, update_last_check
+        from handlers.check import check_subscription_handler
+
+        await self._create_user_with_tickets(1015, 0.0)
+        await update_last_check(1015)
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=1015, username="user1015"),
+            answer=AsyncMock(),
+            message=SimpleNamespace(answer=AsyncMock()),
+        )
+
+        with (
+            patch("handlers.check.check_subscription", new=AsyncMock(return_value=(True, []))),
+            patch("handlers.check.refresh_user_trust_score", new=AsyncMock()),
+        ):
+            await check_subscription_handler(
+                callback=callback,
+                bot=AsyncMock(),
+                i18n=lambda key, **kwargs: key,
+                lang="ru",
+            )
+
+        db_user = await get_user(1015)
+        self.assertEqual(db_user["tickets"], 0.0)
+        callback.message.answer.assert_awaited()
+
+    async def test_reset_clears_last_check_and_allows_initial_tickets_again(self) -> None:
+        """После reset last_check_at=NULL, поэтому новый конкурс снова выдаёт стартовый билет."""
+        from db.models import get_user, reset_contest_with_archive, update_last_check
+        from handlers.check import check_subscription_handler
+
+        await self._create_user_with_tickets(1016, 3.0)
+        await update_last_check(1016)
+        await reset_contest_with_archive(actor_id=111)
+
+        db_user = await get_user(1016)
+        self.assertEqual(db_user["tickets"], 0.0)
+        self.assertIsNone(db_user["last_check_at"])
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=1016, username="user1016"),
+            answer=AsyncMock(),
+            message=SimpleNamespace(answer=AsyncMock()),
+        )
+
+        with (
+            patch("handlers.check.check_subscription", new=AsyncMock(return_value=(True, []))),
+            patch("handlers.check.refresh_user_trust_score", new=AsyncMock()),
+            patch("handlers.check._process_pending_referral", new=AsyncMock()),
+        ):
+            await check_subscription_handler(
+                callback=callback,
+                bot=AsyncMock(),
+                i18n=lambda key, **kwargs: key,
+                lang="ru",
+            )
+
+        db_user = await get_user(1016)
+        self.assertEqual(db_user["tickets"], 1.0)
+        self.assertIsNotNone(db_user["last_check_at"])
 
     async def test_daily_limit_blocks_fourth_spin(self) -> None:
         """После достижения дневного лимита вход блокируется по daily_limit."""

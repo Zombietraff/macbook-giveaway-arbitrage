@@ -152,8 +152,8 @@ async def spin_slot(request: web.Request):
             if not row:
                 raise ValueError("User not found")
                 
-            current_tickets = row["tickets"]
-            if current_tickets < bet_amount: # For webapp we might not require 1 ticket remaining, let's keep it simple
+            current_tickets = float(row["tickets"] or 0.0)
+            if current_tickets < bet_amount or (current_tickets - bet_amount) < 1.0:
                 raise ValueError("Insufficient balance")
                 
             # deduct bet
@@ -164,7 +164,7 @@ async def spin_slot(request: web.Request):
             multiplier = calculate_spin_multiplier(symbols)
             win_amount = int(bet_amount * multiplier)
             
-            result_type = 'win' if multiplier >= 3.0 else ('jackpot' if multiplier == 5.0 else 'loss')
+            result_type = 'jackpot' if multiplier == 5.0 else ('win' if win_amount > 0 else 'loss')
             
             # add win
             if win_amount > 0:
