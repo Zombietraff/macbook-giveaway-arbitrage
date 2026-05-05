@@ -219,9 +219,9 @@ async def start_casino(
     # Отправляем кнопку Web App
     webapp_url = await get_active_webapp_url()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎰 Играть сейчас", web_app=WebAppInfo(url=webapp_url))]
+        [InlineKeyboardButton(text=i18n("menu_casino"), web_app=WebAppInfo(url=webapp_url))]
     ])
-    await message.answer("Запускай кампанию через наше Web App прилажение!", reply_markup=keyboard)
+    await message.answer("Запускайте кампанию через мини-приложение:", reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "casino_accept_disclaimer")
