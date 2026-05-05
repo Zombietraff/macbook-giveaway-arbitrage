@@ -21,9 +21,10 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    MenuButtonDefault,
+    MenuButtonWebApp,
     Message,
     MessageEntity,
+    WebAppInfo,
 )
 
 import config
@@ -774,22 +775,26 @@ async def webapp_url(message: Message, bot: Bot, **kwargs: Any) -> None:
         return
 
     webapp_url_value = await get_active_webapp_url()
-    menu_reset_failed = False
+    menu_update_failed = False
+    menu_button = MenuButtonWebApp(
+        text="🎰 Запустить кампанию",
+        web_app=WebAppInfo(url=webapp_url_value),
+    )
 
     try:
-        await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
-        await bot.set_chat_menu_button(chat_id=message.chat.id, menu_button=MenuButtonDefault())
+        await bot.set_chat_menu_button(menu_button=menu_button)
+        await bot.set_chat_menu_button(chat_id=message.chat.id, menu_button=menu_button)
     except Exception as exc:
-        menu_reset_failed = True
-        logger.warning("webapp_url: menu button reset failed for chat=%s: %s", message.chat.id, exc)
+        menu_update_failed = True
+        logger.warning("webapp_url: menu button update failed for chat=%s: %s", message.chat.id, exc)
 
     await message.answer(
         "🔗 <b>Текущий WEBAPP_URL</b>\n"
         f"<code>{config.WEBAPP_URL}</code>\n\n"
         f"🎮 Активная мини-игра URL:\n<code>{webapp_url_value}</code>\n\n"
-        f"{'⚠️ Нижнюю menu-кнопку не удалось сбросить автоматически.\n' if menu_reset_failed else '✅ Нижняя menu-кнопка сброшена.\n'}"
+        f"{'⚠️ Нижнюю WebApp-кнопку не удалось обновить автоматически.\n' if menu_update_failed else '✅ Нижняя WebApp-кнопка обновлена.\n'}"
         "✅ Свежая reply-клавиатура отправлена ниже.\n"
-        "WebApp открывается через кнопку «🎰 Запустить кампанию».",
+        "WebApp открывается через обе кнопки «🎰 Запустить кампанию».",
         reply_markup=await get_active_main_menu_keyboard(kwargs.get("lang", "ru")),
     )
     _log_admin_action(message.from_user.id, f"webapp_url: {webapp_url_value}")
@@ -811,15 +816,20 @@ async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
     sent = 0
     failed = 0
     blocked = 0
-    menu_reset = 0
+    menu_updated = 0
+    webapp_url_value = await get_active_webapp_url()
+    menu_button = MenuButtonWebApp(
+        text="🎰 Запустить кампанию",
+        web_app=WebAppInfo(url=webapp_url_value),
+    )
 
     for idx, user in enumerate(users, 1):
         user_id = int(user["id"])
         lang = user["language_code"] or "ru"
 
         try:
-            await bot.set_chat_menu_button(chat_id=user_id, menu_button=MenuButtonDefault())
-            menu_reset += 1
+            await bot.set_chat_menu_button(chat_id=user_id, menu_button=menu_button)
+            menu_updated += 1
             await bot.send_message(
                 chat_id=user_id,
                 text="📱",
@@ -844,14 +854,14 @@ async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
     await message.answer(
         "✅ Обновление меню завершено.\n"
         f"Отправлено: <b>{sent}</b>\n"
-        f"Нижняя menu-кнопка сброшена: <b>{menu_reset}</b>\n"
+        f"Нижняя WebApp-кнопка обновлена: <b>{menu_updated}</b>\n"
         f"Ошибок: <b>{failed}</b>\n"
         f"Заблокировали бота: <b>{blocked}</b>"
     )
 
     _log_admin_action(
         message.from_user.id,
-        f"refresh_menu: total={total}, sent={sent}, menu_reset={menu_reset}, failed={failed}, blocked={blocked}",
+        f"refresh_menu: total={total}, sent={sent}, menu_updated={menu_updated}, failed={failed}, blocked={blocked}",
     )
 
 
