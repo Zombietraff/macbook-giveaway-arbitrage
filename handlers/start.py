@@ -88,7 +88,7 @@ async def cmd_start(
                     first_name=user.first_name or "User",
                     tickets=int(tickets),
                 ),
-                reply_markup=await get_active_main_menu_keyboard(lang),
+                reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
             )
         else:
             # Зарегистрирован, но ещё не прошёл проверку подписки

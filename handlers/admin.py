@@ -53,6 +53,7 @@ from keyboards.main_menu import get_active_main_menu_keyboard
 from utils.admin_access import can_manage_contest, can_manage_system, is_owner
 from utils.plugins import get_active_plugin_key, get_active_webapp_url, list_plugins, set_active_plugin_key
 from utils.timezone import get_kyiv_day_bounds_utc
+from utils.webapp_launch import build_webapp_launch_url
 
 logger = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -775,10 +776,11 @@ async def webapp_url(message: Message, bot: Bot, **kwargs: Any) -> None:
         return
 
     webapp_url_value = await get_active_webapp_url()
+    menu_url = build_webapp_launch_url(webapp_url_value, message.from_user.id)
     menu_update_failed = False
     menu_button = MenuButtonWebApp(
         text="🎰 Запустить кампанию",
-        web_app=WebAppInfo(url=webapp_url_value),
+        web_app=WebAppInfo(url=menu_url),
     )
 
     try:
@@ -795,7 +797,10 @@ async def webapp_url(message: Message, bot: Bot, **kwargs: Any) -> None:
         f"{'⚠️ Нижнюю WebApp-кнопку не удалось обновить автоматически.\n' if menu_update_failed else '✅ Нижняя WebApp-кнопка обновлена.\n'}"
         "✅ Свежая reply-клавиатура отправлена ниже.\n"
         "WebApp открывается через обе кнопки «🎰 Запустить кампанию».",
-        reply_markup=await get_active_main_menu_keyboard(kwargs.get("lang", "ru")),
+        reply_markup=await get_active_main_menu_keyboard(
+            kwargs.get("lang", "ru"),
+            user_id=message.from_user.id,
+        ),
     )
     _log_admin_action(message.from_user.id, f"webapp_url: {webapp_url_value}")
 
@@ -818,14 +823,14 @@ async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
     blocked = 0
     menu_updated = 0
     webapp_url_value = await get_active_webapp_url()
-    menu_button = MenuButtonWebApp(
-        text="🎰 Запустить кампанию",
-        web_app=WebAppInfo(url=webapp_url_value),
-    )
 
     for idx, user in enumerate(users, 1):
         user_id = int(user["id"])
         lang = user["language_code"] or "ru"
+        menu_button = MenuButtonWebApp(
+            text="🎰 Запустить кампанию",
+            web_app=WebAppInfo(url=build_webapp_launch_url(webapp_url_value, user_id)),
+        )
 
         try:
             await bot.set_chat_menu_button(chat_id=user_id, menu_button=menu_button)
@@ -833,7 +838,7 @@ async def refresh_menu(message: Message, bot: Bot, **kwargs: Any) -> None:
             await bot.send_message(
                 chat_id=user_id,
                 text="📱",
-                reply_markup=await get_active_main_menu_keyboard(lang),
+                reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
                 disable_notification=True,
             )
             sent += 1

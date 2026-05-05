@@ -89,7 +89,7 @@ async def check_subscription_handler(
         await update_last_check(user_id)
         await callback.message.answer(
             i18n("check_already", tickets=int(tickets)),
-            reply_markup=await get_active_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
         )
         logger.info("Повторная проверка user=%d, tickets=%.1f", user_id, tickets)
     else:
@@ -108,7 +108,7 @@ async def check_subscription_handler(
         from keyboards.main_menu import get_active_main_menu_keyboard
         await callback.message.answer(
             i18n("check_success", tickets=int(base_tickets)),
-            reply_markup=await get_active_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
         )
         logger.info(
             "Первая проверка user=%d: начислено %.1f билетов (premium=%s)",

@@ -83,6 +83,6 @@ async def back_to_menu(
     await callback.message.delete()
     await callback.message.answer(
         "📱",
-        reply_markup=await get_active_main_menu_keyboard(lang),
+        reply_markup=await get_active_main_menu_keyboard(lang, user_id=callback.from_user.id),
     )
     await callback.answer()

@@ -52,7 +52,7 @@ async def change_language(callback: CallbackQuery, lang: str, i18n: Callable, **
     # Обновляем главное меню с новым языком
     await callback.message.answer(
         get_text("menu_back", new_lang),
-        reply_markup=await get_active_main_menu_keyboard(new_lang),
+        reply_markup=await get_active_main_menu_keyboard(new_lang, user_id=user_id),
     )
 
     logger.info("Пользователь %d сменил язык: %s → %s", user_id, lang, new_lang)

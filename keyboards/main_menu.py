@@ -18,9 +18,14 @@ from aiogram.types import (
 import config
 from middlewares.localization import get_text
 from utils.plugins import get_active_webapp_url
+from utils.webapp_launch import build_webapp_launch_url
 
 
-def get_main_menu_keyboard(lang: str = "ru", webapp_url: str | None = None) -> ReplyKeyboardMarkup:
+def get_main_menu_keyboard(
+    lang: str = "ru",
+    webapp_url: str | None = None,
+    user_id: int | None = None,
+) -> ReplyKeyboardMarkup:
     """
     Главное меню участника (Reply-клавиатура).
 
@@ -30,12 +35,13 @@ def get_main_menu_keyboard(lang: str = "ru", webapp_url: str | None = None) -> R
     - Язык | Победители
     - Запустить кампанию
     """
+    launch_url = build_webapp_launch_url(webapp_url or config.WEBAPP_URL, user_id)
     return ReplyKeyboardMarkup(
         keyboard=[
             [
                 KeyboardButton(
                     text=get_text("menu_casino", lang),
-                    web_app=WebAppInfo(url=webapp_url or config.WEBAPP_URL),
+                    web_app=WebAppInfo(url=launch_url),
                 ),
             ],
             [
@@ -56,9 +62,16 @@ def get_main_menu_keyboard(lang: str = "ru", webapp_url: str | None = None) -> R
     )
 
 
-async def get_active_main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+async def get_active_main_menu_keyboard(
+    lang: str = "ru",
+    user_id: int | None = None,
+) -> ReplyKeyboardMarkup:
     """Главное меню с URL активной мини-игры из settings.active_plugin_key."""
-    return get_main_menu_keyboard(lang, webapp_url=await get_active_webapp_url())
+    return get_main_menu_keyboard(
+        lang,
+        webapp_url=await get_active_webapp_url(),
+        user_id=user_id,
+    )
 
 
 def get_check_subscription_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:

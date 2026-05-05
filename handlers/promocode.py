@@ -66,7 +66,7 @@ async def cancel_promo_input(
     await state.clear()
     await message.answer(
         i18n("promo_cancel"),
-        reply_markup=await get_active_main_menu_keyboard(lang),
+        reply_markup=await get_active_main_menu_keyboard(lang, user_id=message.from_user.id),
     )
 
 
@@ -92,7 +92,7 @@ async def process_promo_code(
         await state.clear()
         await message.answer(
             i18n("menu_back"),
-            reply_markup=await get_active_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
         )
         return
 
@@ -110,7 +110,7 @@ async def process_promo_code(
         await state.clear()
         await message.answer(
             i18n("menu_back"),
-            reply_markup=await get_active_main_menu_keyboard(lang),
+            reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
         )
         return
 
@@ -125,7 +125,7 @@ async def process_promo_code(
     await state.clear()
     await message.answer(
         i18n("promo_success", total=int(total)),
-        reply_markup=await get_active_main_menu_keyboard(lang),
+        reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
     )
 
     logger.info(

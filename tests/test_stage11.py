@@ -36,6 +36,7 @@ class _FakeWebAppRequest(dict):
     def __init__(self, body: dict) -> None:
         super().__init__()
         self.headers = {"Authorization": "tma TEST_INIT_DATA"}
+        self.query = {}
         self._body = body
 
     async def json(self) -> dict:
@@ -187,6 +188,25 @@ class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
 
         db_user = await get_user(1014)
         self.assertEqual(db_user["tickets"], 2.0)
+
+    async def test_webapp_launch_token_auth_fallback_accepts_disclaimer(self) -> None:
+        """Signed launch-token fallback авторизует WebApp API без Telegram initData."""
+        from api.routes import accept_disclaimer
+        from db.models import has_user_flag
+        from utils.webapp_launch import create_webapp_launch_token
+
+        await self._create_user_with_tickets(1017, 1.0)
+
+        request = _FakeWebAppRequest({})
+        request.headers = {
+            "Authorization": "tma ",
+            "X-WebApp-Launch-Token": create_webapp_launch_token(1017),
+        }
+
+        response = await accept_disclaimer(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(await has_user_flag(1017, "webapp_disclaimer_accepted"))
 
     async def test_repeat_subscription_check_with_last_check_does_not_reissue_tickets(self) -> None:
         """Если last_check_at уже выставлен, повторная проверка не начисляет стартовые билеты даже при 0."""

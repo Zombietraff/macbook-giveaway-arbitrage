@@ -7,6 +7,7 @@ import logging
 from config import BOT_TOKEN
 from db.database import get_db
 from db.models import get_user, has_user_flag, set_user_flag
+from utils.webapp_launch import validate_webapp_launch_token
 import random
 
 logger = logging.getLogger(__name__)
@@ -46,10 +47,16 @@ def webapp_auth(func):
         if not init_data:
             init_data = request.headers.get("X-Telegram-Init-Data", "").strip()
 
-        if not init_data:
+        launch_token = request.headers.get("X-WebApp-Launch-Token", "").strip()
+        if not launch_token:
+            launch_token = request.query.get("launch", "").strip()
+
+        if not init_data and not launch_token:
             return web.json_response({"error": "Unauthorized"}, status=401)
-            
-        user_data = validate_init_data(init_data, BOT_TOKEN)
+
+        user_data = validate_init_data(init_data, BOT_TOKEN) if init_data else None
+        if not user_data and launch_token:
+            user_data = validate_webapp_launch_token(launch_token)
         if not user_data:
             return web.json_response({"error": "Forbidden: Invalid signature"}, status=403)
             
@@ -202,13 +209,13 @@ def setup_routes(app: web.Application):
                 headers={
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Authorization, X-Telegram-Init-Data, Content-Type",
+                    "Access-Control-Allow-Headers": "Authorization, X-Telegram-Init-Data, X-WebApp-Launch-Token, Content-Type",
                 }
             )
         response = await handler(request)
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, X-Telegram-Init-Data, Content-Type"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, X-Telegram-Init-Data, X-WebApp-Launch-Token, Content-Type"
         return response
 
     app.middlewares.append(cors_middleware)

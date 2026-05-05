@@ -190,6 +190,7 @@ async def _show_bet_picker(
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from utils.plugins import get_active_webapp_url
+from utils.webapp_launch import build_webapp_launch_url
 
 @router.message(F.text == "🎰 Запустить кампанию")
 async def start_casino(
@@ -217,7 +218,7 @@ async def start_casino(
     await state.clear()
     
     # Отправляем кнопку Web App
-    webapp_url = await get_active_webapp_url()
+    webapp_url = build_webapp_launch_url(await get_active_webapp_url(), user_id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n("menu_casino"), web_app=WebAppInfo(url=webapp_url))]
     ])
