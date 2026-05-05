@@ -304,6 +304,62 @@ async def clear_winners() -> None:
 
 
 # ════════════════════════════════════════════════════════════
+#  CONTEST PRIZES
+# ════════════════════════════════════════════════════════════
+
+async def set_contest_prizes(
+    prizes: list[tuple[int, str]],
+    created_by: int,
+) -> None:
+    """Заменить текущий список призов конкурса в заданном порядке."""
+    db = await get_db()
+    await db.execute("BEGIN IMMEDIATE")
+    try:
+        await db.execute("DELETE FROM contest_prizes")
+        for position, (quantity, name) in enumerate(prizes, start=1):
+            await db.execute(
+                """
+                INSERT INTO contest_prizes (position, name, quantity, created_by)
+                VALUES (?, ?, ?, ?)
+                """,
+                (position, name, int(quantity), int(created_by)),
+            )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+
+async def get_contest_prizes() -> list[aiosqlite.Row]:
+    """Получить настроенные призы в порядке редкости/выдачи."""
+    db = await get_db()
+    async with db.execute(
+        """
+        SELECT *
+        FROM contest_prizes
+        ORDER BY position ASC, id ASC
+        """
+    ) as cursor:
+        return await cursor.fetchall()
+
+
+async def clear_contest_prizes() -> None:
+    """Очистить настроенный список призов конкурса."""
+    db = await get_db()
+    await db.execute("DELETE FROM contest_prizes")
+    await db.commit()
+
+
+async def get_draw_prize_list() -> list[str]:
+    """Развернуть prize rows в список призов для последовательной выдачи."""
+    rows = await get_contest_prizes()
+    prize_list: list[str] = []
+    for row in rows:
+        prize_list.extend([str(row["name"])] * int(row["quantity"]))
+    return prize_list
+
+
+# ════════════════════════════════════════════════════════════
 #  SETTINGS
 # ════════════════════════════════════════════════════════════
 

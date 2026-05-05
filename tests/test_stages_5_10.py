@@ -225,8 +225,13 @@ class TestDrawLogic(unittest.TestCase):
             database_mod._connection = conn
 
             try:
-                from db.models import add_user_tickets, create_user
+                from db.models import add_user_tickets, create_user, set_contest_prizes
                 from utils.draw import perform_draw
+
+                await set_contest_prizes(
+                    [(2, "Prize A"), (1, "Prize B"), (1, "Prize C")],
+                    created_by=111,
+                )
 
                 # Создаём 5 участников
                 for i in range(1, 6):
@@ -241,12 +246,7 @@ class TestDrawLogic(unittest.TestCase):
 
                 self.assertEqual(len(winners), 4)
 
-                # Первые 3 — MacBook Neo
-                for w in winners[:3]:
-                    self.assertEqual(w["prize"], "MacBook Neo")
-
-                # 4-й — AirPods
-                self.assertEqual(winners[3]["prize"], "AirPods 3 Pro")
+                self.assertEqual([w["prize"] for w in winners], ["Prize A", "Prize A", "Prize B", "Prize C"])
 
                 # Все уникальные
                 winner_ids = [w["user_id"] for w in winners]
@@ -270,8 +270,10 @@ class TestDrawLogic(unittest.TestCase):
             database_mod._connection = conn
 
             try:
-                from db.models import add_user_tickets, create_user
+                from db.models import add_user_tickets, create_user, set_contest_prizes
                 from utils.draw import perform_draw
+
+                await set_contest_prizes([(2, "Prize A"), (1, "Prize B")], created_by=111)
 
                 # Только 2 участника
                 await create_user(100, "u1", "A", "B", "ru", False, "r1")
@@ -283,6 +285,33 @@ class TestDrawLogic(unittest.TestCase):
                 winners = await perform_draw(mock_bot)
                 self.assertEqual(len(winners), 0)
 
+            finally:
+                await conn.close()
+                database_mod._connection = None
+
+        asyncio.run(_run())
+
+    def test_draw_without_prizes_is_blocked(self) -> None:
+        """Без настроенных призов perform_draw блокирует розыгрыш."""
+        async def _run() -> None:
+            import db.database as database_mod
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                from db.models import add_user_tickets, create_user
+                from utils.draw import DrawPrizesNotConfiguredError, perform_draw
+
+                for i in range(1, 5):
+                    await create_user(i * 100, f"u{i}", f"N{i}", "L", "ru", False, f"nop{i}")
+                    await add_user_tickets(i * 100, 1.0)
+
+                with self.assertRaises(DrawPrizesNotConfiguredError):
+                    await perform_draw(AsyncMock())
             finally:
                 await conn.close()
                 database_mod._connection = None
@@ -427,13 +456,13 @@ class TestWinnersDisplay(unittest.TestCase):
                 await create_user(100, "winner1", "A", "B", "ru", False, "r1")
                 await create_user(200, "winner2", "C", "D", "uk", True, "r2")
 
-                await add_winner(100, "MacBook Neo", datetime.now())
-                await add_winner(200, "AirPods 3 Pro", datetime.now())
+                await add_winner(100, "Custom Prize A", datetime.now())
+                await add_winner(200, "Custom Prize B", datetime.now())
 
                 winners = await get_all_winners()
                 self.assertEqual(len(winners), 2)
-                self.assertEqual(winners[0]["prize"], "MacBook Neo")
-                self.assertEqual(winners[1]["prize"], "AirPods 3 Pro")
+                self.assertEqual(winners[0]["prize"], "Custom Prize A")
+                self.assertEqual(winners[1]["prize"], "Custom Prize B")
 
             finally:
                 await conn.close()
@@ -442,8 +471,111 @@ class TestWinnersDisplay(unittest.TestCase):
         asyncio.run(_run())
 
 
+class TestContestPrizes(unittest.TestCase):
+    """Тесты настройки призов конкурса."""
+
+    def setUp(self) -> None:
+        self.tmp_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.tmp_file.name
+        self.tmp_file.close()
+
+    def tearDown(self) -> None:
+        os.unlink(self.db_path)
+
+    def test_contest_prizes_crud_and_expansion(self) -> None:
+        """Призы сохраняются по порядку и разворачиваются по quantity."""
+        async def _run() -> None:
+            import db.database as database_mod
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                from db.models import (
+                    clear_contest_prizes,
+                    get_contest_prizes,
+                    get_draw_prize_list,
+                    set_contest_prizes,
+                )
+
+                await set_contest_prizes([(2, "Prize A"), (1, "Prize B")], created_by=111)
+                rows = await get_contest_prizes()
+                self.assertEqual([row["position"] for row in rows], [1, 2])
+                self.assertEqual([row["quantity"] for row in rows], [2, 1])
+                self.assertEqual(await get_draw_prize_list(), ["Prize A", "Prize A", "Prize B"])
+
+                await clear_contest_prizes()
+                self.assertEqual(await get_draw_prize_list(), [])
+            finally:
+                await conn.close()
+                database_mod._connection = None
+
+        asyncio.run(_run())
+
+    def test_winners_prize_check_migration_preserves_rows(self) -> None:
+        """Миграция убирает старый CHECK winners.prize и сохраняет winners."""
+        async def _run() -> None:
+            from db.database import _migrate_winners_prize_constraint
+
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            try:
+                await conn.executescript(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        ref_link TEXT UNIQUE
+                    );
+                    CREATE TABLE winners (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        prize TEXT CHECK(prize IN ('MacBook Neo', 'AirPods 3 Pro')),
+                        draw_date TIMESTAMP,
+                        FOREIGN KEY(user_id) REFERENCES users(id)
+                    );
+                    INSERT INTO users (id, ref_link) VALUES (100, 'r100');
+                    INSERT INTO winners (user_id, prize, draw_date)
+                    VALUES (100, 'MacBook Neo', '2026-01-01T00:00:00');
+                    """
+                )
+
+                await _migrate_winners_prize_constraint(conn)
+                await conn.execute(
+                    "INSERT INTO winners (user_id, prize, draw_date) VALUES (100, 'Custom Prize', '2026-01-02')"
+                )
+                await conn.commit()
+
+                async with conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='winners'"
+                ) as cursor:
+                    sql = (await cursor.fetchone())[0]
+                self.assertNotIn("CHECK(prize IN", sql)
+
+                async with conn.execute("SELECT prize FROM winners ORDER BY id") as cursor:
+                    prizes = [row[0] for row in await cursor.fetchall()]
+                self.assertEqual(prizes, ["MacBook Neo", "Custom Prize"])
+            finally:
+                await conn.close()
+
+        asyncio.run(_run())
+
+
 class TestAdminFunctions(unittest.TestCase):
     """Тесты админ-функций."""
+
+    def test_parse_prize_lines(self) -> None:
+        """Парсер /set_prizes принимает валидный формат и отклоняет ошибки."""
+        from handlers.admin import _parse_prize_lines
+
+        self.assertEqual(
+            _parse_prize_lines("2 | Prize A\n1 | Prize B"),
+            [(2, "Prize A"), (1, "Prize B")],
+        )
+        with self.assertRaises(ValueError):
+            _parse_prize_lines("Prize without quantity")
+        with self.assertRaises(ValueError):
+            _parse_prize_lines("0 | Prize")
 
     def test_admin_id_check(self) -> None:
         """Проверка ID администратора."""
@@ -619,10 +751,12 @@ class TestAdminFunctions(unittest.TestCase):
                 get_trust_stats,
                 get_contest_reset_preview,
                 get_contest_reset_runs,
+                get_draw_prize_list,
                 get_setting,
                 get_user,
                 reset_contest_with_archive,
                 set_setting,
+                set_contest_prizes,
                 set_user_trust_score,
                 set_user_flag,
             )
@@ -641,10 +775,11 @@ class TestAdminFunctions(unittest.TestCase):
                 await create_referral(100, 200)
                 await set_user_flag(100, "keep_flag")
                 await set_setting("active_plugin_key", "cherry-charm")
+                await set_contest_prizes([(1, "Keep Prize")], created_by=111)
                 await add_admin_audit_log(111, "before_reset")
                 await set_user_trust_score(100, common_chat_count=1)
 
-                await add_winner(100, "MacBook Neo", datetime.now())
+                await add_winner(100, "Archived Prize", datetime.now())
                 await add_channel("-1001", "Channel", "https://t.me/example")
                 await add_promocode("RESET_CODE")
                 await add_temporary_admin(333, added_by=111, username="temp", first_name="Temp")
@@ -693,10 +828,13 @@ class TestAdminFunctions(unittest.TestCase):
                     "referrals": 1,
                     "user_flags": 1,
                     "admin_audit_log": 1,
+                    "contest_prizes": 1,
                 }
                 for table, expected in checks.items():
                     async with conn.execute(f"SELECT COUNT(*) FROM {table}") as cursor:
                         self.assertEqual((await cursor.fetchone())[0], expected, table)
+
+                self.assertEqual(await get_draw_prize_list(), ["Keep Prize"])
 
                 archive_checks = {
                     "contest_reset_user_tickets": 2,

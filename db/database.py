@@ -73,10 +73,22 @@ CREATE TABLE IF NOT EXISTS referrals (
 CREATE TABLE IF NOT EXISTS winners (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id   INTEGER,
-    prize     TEXT CHECK(prize IN ('MacBook Neo', 'AirPods 3 Pro')),
+    prize     TEXT NOT NULL,
     draw_date TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- contest_prizes: настраиваемый список призов текущего конкурса
+CREATE TABLE IF NOT EXISTS contest_prizes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    position   INTEGER NOT NULL,
+    name       TEXT    NOT NULL,
+    quantity   INTEGER NOT NULL CHECK(quantity > 0),
+    created_by INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_prizes_position ON contest_prizes(position);
 
 -- settings: настройки бота (хранение даты окончания)
 CREATE TABLE IF NOT EXISTS settings (
@@ -287,12 +299,51 @@ async def _ensure_column(
 
 async def _run_schema_migrations(db: aiosqlite.Connection) -> None:
     """Лёгкие совместимые миграции для уже существующих SQLite таблиц."""
+    await _migrate_winners_prize_constraint(db)
     await _ensure_column(
         db,
         "contest_reset_runs",
         "trust_scores_count",
         "INTEGER NOT NULL DEFAULT 0",
     )
+
+
+async def _migrate_winners_prize_constraint(db: aiosqlite.Connection) -> None:
+    """Удалить старый CHECK winners.prize IN (...) без потери winners."""
+    async with db.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'winners'"
+    ) as cursor:
+        row = await cursor.fetchone()
+
+    table_sql = str(row[0] or "") if row else ""
+    if "CHECK(prize IN" not in table_sql:
+        return
+
+    logger.info("Миграция winners: удаление фиксированного CHECK на prize.")
+    await db.execute("PRAGMA foreign_keys=OFF;")
+    try:
+        await db.execute("ALTER TABLE winners RENAME TO winners_old_prize_check")
+        await db.execute(
+            """
+            CREATE TABLE winners (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id   INTEGER,
+                prize     TEXT NOT NULL,
+                draw_date TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT INTO winners (id, user_id, prize, draw_date)
+            SELECT id, user_id, COALESCE(prize, ''), draw_date
+            FROM winners_old_prize_check
+            """
+        )
+        await db.execute("DROP TABLE winners_old_prize_check")
+    finally:
+        await db.execute("PRAGMA foreign_keys=ON;")
 
 
 async def get_db() -> aiosqlite.Connection:

@@ -102,6 +102,14 @@ async def main() -> None:
         total_tickets = (await cur.fetchone())[0] or 0
     print(f"  Всего билетов:           {total_tickets}")
 
+    from db.models import get_contest_prizes, get_draw_prize_list
+
+    prize_rows = await get_contest_prizes()
+    draw_prizes = await get_draw_prize_list()
+    print(f"  Настроенных призов:      {len(draw_prizes)}")
+    for prize in prize_rows:
+        print(f"    {prize['position']}. {prize['quantity']} × {prize['name']}")
+
     # Детальная таблица участников
     print(f"\n  {'─' * 55}")
     print(f"  {'ID':>12} │ {'Username':>15} │ {'Tickets':>8} │ {'Blocked':>7}")
@@ -141,9 +149,14 @@ async def main() -> None:
 
     issues = []
 
-    if eligible < 4:
+    if not draw_prizes:
         issues.append(
-            f"❌ Недостаточно участников: {eligible} (нужно >= 4).\n"
+            "❌ Призы не настроены. /draw будет заблокирован.\n"
+            "   Используйте /set_prizes в Telegram."
+        )
+    elif eligible < len(draw_prizes):
+        issues.append(
+            f"❌ Недостаточно участников: {eligible} (нужно >= {len(draw_prizes)}).\n"
             f"   Для тестирования создайте тестовых пользователей:\n"
             f"   uv run python scripts/diagnose_draw.py --seed-test-users"
         )

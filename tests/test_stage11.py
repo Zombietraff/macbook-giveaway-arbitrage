@@ -171,6 +171,57 @@ class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
         db_user = await get_user(1013)
         self.assertEqual(db_user["tickets"], 1.0)
 
+    async def test_webapp_paytable_payouts_and_pair_position(self) -> None:
+        """WebApp payout uses paytable values; pairs count only on first two reels."""
+        from api.routes import calculate_spin_payout
+
+        cases = [
+            (["CHERRY", "CHERRY", "CHERRY"], 50),
+            (["CHERRY", "CHERRY", "LEMON"], 40),
+            (["APPLE", "APPLE", "APPLE"], 20),
+            (["APPLE", "APPLE", "LEMON"], 10),
+            (["BANANA", "BANANA", "BANANA"], 15),
+            (["BANANA", "BANANA", "LEMON"], 5),
+            (["LEMON", "LEMON", "LEMON"], 5),
+            (["LEMON", "CHERRY", "CHERRY"], 0),
+            (["CHERRY", "APPLE", "CHERRY"], 0),
+        ]
+
+        for symbols, payout in cases:
+            with self.subTest(symbols=symbols):
+                self.assertEqual(calculate_spin_payout(symbols), payout)
+
+    async def test_webapp_spin_paytable_times_bet(self) -> None:
+        """WebApp spin returns paytable payout multiplied by bet."""
+        from api.routes import spin_slot
+        from db.models import get_user, set_user_flag
+
+        await self._create_user_with_tickets(1018, 10.0)
+        await set_user_flag(1018, "webapp_disclaimer_accepted")
+
+        request = _FakeWebAppRequest({"bet": 2})
+
+        with (
+            patch("api.routes.validate_init_data", return_value={"id": 1018}),
+            patch("api.routes.generate_spin_result", return_value=["CHERRY", "CHERRY", "CHERRY"]),
+        ):
+            response = await spin_slot(request)
+
+        data = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["win"], 100)
+        self.assertEqual(data["coins"], 108.0)
+
+        db_user = await get_user(1018)
+        self.assertEqual(db_user["tickets"], 108.0)
+
+    async def test_webapp_spin_symbol_pool_has_no_bar(self) -> None:
+        """WebApp symbol pool contains only symbols present on current reels/paytable."""
+        from api.routes import SYMBOL_MAP
+
+        self.assertNotIn("BAR", SYMBOL_MAP)
+        self.assertEqual(set(SYMBOL_MAP), {"CHERRY", "APPLE", "BANANA", "LEMON"})
+
     async def test_webapp_spin_balance_2_bet_2_is_rejected(self) -> None:
         """WebApp spin отклоняет ставку, которая оставила бы 0 билетов."""
         from api.routes import spin_slot

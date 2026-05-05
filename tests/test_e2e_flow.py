@@ -68,10 +68,11 @@ class TestE2EFlow(unittest.IsolatedAsyncioTestCase):
         from handlers.start import cmd_start
         from handlers.check import check_subscription_handler
         from handlers.promocode import PromoCodeInput, process_promo_code
-        from db.models import get_user, add_promocode, get_all_winners, set_end_date
+        from db.models import get_user, add_promocode, get_all_winners, set_end_date, set_contest_prizes
 
         # Ставим дату будущего для корректной работы middleware
         await set_end_date(datetime(2026, 12, 31, 23, 59))
+        await set_contest_prizes([(2, "Prize A"), (1, "Prize B"), (1, "Prize C")], created_by=111)
         from utils.draw import perform_draw
         from aiogram.types import Message, User, CallbackQuery, Chat
         from aiogram.fsm.context import FSMContext
@@ -157,8 +158,7 @@ class TestE2EFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(db_winners), 4)
         
         prizes = [w["prize"] for w in db_winners]
-        self.assertEqual(prizes.count("MacBook Neo"), 3)
-        self.assertEqual(prizes.count("AirPods 3 Pro"), 1)
+        self.assertEqual(prizes, ["Prize A", "Prize A", "Prize B", "Prize C"])
 
 if __name__ == "__main__":
     unittest.main()

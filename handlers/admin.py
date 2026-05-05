@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from html import escape
 from typing import Any
 
 from aiogram import Bot, F, Router
@@ -34,10 +35,12 @@ from db.models import (
     add_channel,
     add_promocode,
     add_temporary_admin,
+    clear_contest_prizes,
     clear_winners,
     get_all_channels,
     get_all_promocodes,
     get_casino_stats,
+    get_contest_prizes,
     get_contest_reset_preview,
     get_contest_reset_runs,
     get_end_date,
@@ -46,6 +49,7 @@ from db.models import (
     remove_channel as delete_channel,
     reset_contest_with_archive,
     revoke_temporary_admin,
+    set_contest_prizes,
     set_end_date,
     set_user_blocked,
 )
@@ -72,6 +76,12 @@ class AdminSendState(StatesGroup):
     """FSM-состояние для подтверждения админ-рассылки /send."""
 
     waiting_confirm = State()
+
+
+class AdminPrizeState(StatesGroup):
+    """FSM-состояние для многострочной настройки призов."""
+
+    waiting_prizes = State()
 
 
 async def _is_admin(user_id: int) -> bool:
@@ -102,6 +112,51 @@ def _fmt_amount(value: float) -> str:
     if float(value).is_integer():
         return str(int(value))
     return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _parse_prize_lines(text: str) -> list[tuple[int, str]]:
+    """Разобрать строки формата '<quantity> | <prize name>'."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("укажите хотя бы один приз")
+
+    prizes: list[tuple[int, str]] = []
+    for idx, line in enumerate(lines, start=1):
+        if "|" not in line:
+            raise ValueError(f"строка {idx}: нужен разделитель |")
+
+        quantity_raw, name_raw = line.split("|", maxsplit=1)
+        try:
+            quantity = int(quantity_raw.strip())
+        except ValueError as exc:
+            raise ValueError(f"строка {idx}: количество должно быть целым числом") from exc
+
+        name = name_raw.strip()
+        if quantity <= 0:
+            raise ValueError(f"строка {idx}: количество должно быть больше 0")
+        if not name:
+            raise ValueError(f"строка {idx}: название приза пустое")
+        if len(name) > 120:
+            raise ValueError(f"строка {idx}: название приза слишком длинное")
+
+        prizes.append((quantity, name))
+
+    return prizes
+
+
+def _format_prize_rows(prizes: list[Any]) -> str:
+    """Сформировать человекочитаемый список призов."""
+    if not prizes:
+        return "📭 Призы конкурса не настроены."
+
+    total = sum(int(row["quantity"]) for row in prizes)
+    lines = [f"🏆 <b>Призы конкурса</b>\nВсего победителей: <b>{total}</b>"]
+    for row in prizes:
+        lines.append(
+            f"{int(row['position'])}. <b>{int(row['quantity'])}</b> × "
+            f"{escape(str(row['name']))}"
+        )
+    return "\n".join(lines)
 
 
 def _get_send_preview_keyboard() -> InlineKeyboardMarkup:
@@ -146,6 +201,9 @@ def _get_admin_menu_keyboard(owner: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📢 Каналы", callback_data=f"{_ADMIN_MENU_PREFIX}channels"),
         ],
         [
+            InlineKeyboardButton(text="🏆 Призы", callback_data=f"{_ADMIN_MENU_PREFIX}prizes"),
+        ],
+        [
             InlineKeyboardButton(text="🥚 Промокоды", callback_data=f"{_ADMIN_MENU_PREFIX}promos"),
         ],
     ]
@@ -174,6 +232,12 @@ _ADMIN_MENU_HELP = {
         "/list_channels\n"
         "/add_channel <channel_id> | <title> | <invite_link>\n"
         "/remove_channel <channel_id>"
+    ),
+    "prizes": (
+        "🏆 Призы конкурса:\n"
+        "/set_prizes — задать список через многострочный ввод\n"
+        "/list_prizes — показать текущий список\n"
+        "/clear_prizes — очистить список"
     ),
     "promos": (
         "🥚 Промокоды:\n"
@@ -466,6 +530,105 @@ async def admin_add_promocodes(message: Message, **kwargs: Any) -> None:
     await add_admin_audit_log(message.from_user.id, "add_promocodes", payload={"count": len(codes)})
     await message.answer(f"✅ Промокоды добавлены: <b>{len(codes)}</b>")
     _log_admin_action(message.from_user.id, f"add_promocodes: {len(codes)}")
+
+
+@router.message(Command("set_prizes"))
+async def admin_set_prizes_start(
+    message: Message,
+    state: FSMContext,
+    **kwargs: Any,
+) -> None:
+    """Запустить настройку призов конкурса или принять inline payload."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    payload = (message.text or "").split(maxsplit=1)
+    if len(payload) > 1 and payload[1].strip():
+        try:
+            prizes = _parse_prize_lines(payload[1])
+        except ValueError as exc:
+            await message.answer(f"❌ Ошибка в списке призов: {escape(str(exc))}")
+            return
+
+        await set_contest_prizes(prizes, created_by=message.from_user.id)
+        await add_admin_audit_log(
+            message.from_user.id,
+            "set_prizes",
+            payload={"total": sum(quantity for quantity, _ in prizes), "items": prizes},
+        )
+        await message.answer(_format_prize_rows(await get_contest_prizes()))
+        _log_admin_action(message.from_user.id, f"set_prizes: {len(prizes)} rows")
+        return
+
+    await state.set_state(AdminPrizeState.waiting_prizes)
+    await message.answer(
+        "🏆 Отправьте список призов строками в формате:\n"
+        "<code>1 | Главный приз</code>\n"
+        "<code>3 | Приз второго уровня</code>\n"
+        "<code>5 | Бонусный приз</code>\n\n"
+        "Порядок сверху вниз будет порядком выдачи: сначала лучшие призы.\n"
+        "Для отмены отправьте /cancel."
+    )
+    _log_admin_action(message.from_user.id, "set_prizes_started")
+
+
+@router.message(AdminPrizeState.waiting_prizes)
+async def admin_set_prizes_receive(
+    message: Message,
+    state: FSMContext,
+    **kwargs: Any,
+) -> None:
+    """Принять многострочный список призов для /set_prizes."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    text = message.text or ""
+    if text.strip().lower() in {"/cancel", "cancel", "отмена"}:
+        await state.clear()
+        await message.answer("❌ Настройка призов отменена.")
+        return
+
+    try:
+        prizes = _parse_prize_lines(text)
+    except ValueError as exc:
+        await message.answer(
+            f"❌ Ошибка в списке призов: {escape(str(exc))}\n\n"
+            "Старый список не изменён. Исправьте сообщение и отправьте ещё раз."
+        )
+        return
+
+    await set_contest_prizes(prizes, created_by=message.from_user.id)
+    await add_admin_audit_log(
+        message.from_user.id,
+        "set_prizes",
+        payload={"total": sum(quantity for quantity, _ in prizes), "items": prizes},
+    )
+    await state.clear()
+    await message.answer(_format_prize_rows(await get_contest_prizes()))
+    _log_admin_action(message.from_user.id, f"set_prizes: {len(prizes)} rows")
+
+
+@router.message(Command("list_prizes"))
+async def admin_list_prizes(message: Message, **kwargs: Any) -> None:
+    """Показать текущий список призов конкурса."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    await message.answer(_format_prize_rows(await get_contest_prizes()))
+    _log_admin_action(message.from_user.id, "list_prizes")
+
+
+@router.message(Command("clear_prizes"))
+async def admin_clear_prizes(message: Message, **kwargs: Any) -> None:
+    """Очистить список призов конкурса."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    await clear_contest_prizes()
+    await add_admin_audit_log(message.from_user.id, "clear_prizes")
+    await message.answer("✅ Список призов очищен. /draw будет заблокирован до новой настройки призов.")
+    _log_admin_action(message.from_user.id, "clear_prizes")
 
 
 @router.message(Command("list_plugins"))
@@ -1024,8 +1187,7 @@ async def trigger_draw(message: Message, bot: Bot, **kwargs: Any) -> None:
     if not await _is_admin(message.from_user.id):
         return
 
-    from aiogram import Bot as BotType
-    from utils.draw import perform_draw
+    from utils.draw import DrawPrizesNotConfiguredError, perform_draw
 
     await message.answer("🎲 Запуск розыгрыша...")
     _log_admin_action(message.from_user.id, "draw_started")
@@ -1034,19 +1196,27 @@ async def trigger_draw(message: Message, bot: Bot, **kwargs: Any) -> None:
         winners = await perform_draw(bot)
 
         if not winners:
-            await message.answer("❌ Розыгрыш не удался: недостаточно участников.")
+            await message.answer(
+                "❌ Розыгрыш не удался: недостаточно eligible участников для текущего списка призов."
+            )
             return
 
         lines = ["🏆 <b>Результаты розыгрыша:</b>\n"]
         for idx, w in enumerate(winners, 1):
-            name = w.get("username") or w.get("first_name") or str(w["user_id"])
+            name = escape(str(w.get("username") or w.get("first_name") or w["user_id"]))
             if w.get("username"):
                 name = f"@{name}"
-            lines.append(f"{idx}. {name} — <b>{w['prize']}</b>")
+            lines.append(f"{idx}. {name} — <b>{escape(str(w['prize']))}</b>")
 
         await message.answer("\n".join(lines))
         _log_admin_action(message.from_user.id, f"draw_completed: {len(winners)} winners")
 
+    except DrawPrizesNotConfiguredError:
+        await message.answer(
+            "❌ Призы конкурса не настроены.\n"
+            "Сначала задайте список через /set_prizes, затем повторите /draw."
+        )
+        _log_admin_action(message.from_user.id, "draw_error: prizes_not_configured")
     except Exception as e:
         logger.error("Ошибка розыгрыша: %s", e)
         await message.answer(f"❌ Ошибка: {e}")

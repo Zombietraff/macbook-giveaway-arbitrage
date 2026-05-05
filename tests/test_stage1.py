@@ -81,9 +81,18 @@ CREATE TABLE IF NOT EXISTS referrals (
 CREATE TABLE IF NOT EXISTS winners (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id   INTEGER,
-    prize     TEXT CHECK(prize IN ('MacBook Neo', 'AirPods 3 Pro')),
+    prize     TEXT NOT NULL,
     draw_date TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS contest_prizes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    position   INTEGER NOT NULL,
+    name       TEXT    NOT NULL,
+    quantity   INTEGER NOT NULL CHECK(quantity > 0),
+    created_by INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -105,7 +114,7 @@ class TestDatabaseSchema(unittest.TestCase):
         os.unlink(self.db_path)
 
     def test_all_tables_created(self) -> None:
-        """Все 5 таблиц создаются корректно."""
+        """Базовые таблицы создаются корректно."""
         async def _run() -> None:
             async with aiosqlite.connect(self.db_path) as db:
                 await db.executescript(_SCHEMA_SQL)
@@ -116,7 +125,7 @@ class TestDatabaseSchema(unittest.TestCase):
                 ) as cursor:
                     tables = [row[0] for row in await cursor.fetchall()]
 
-                expected = ["channels", "promocodes", "referrals", "settings", "users", "winners"]
+                expected = ["channels", "contest_prizes", "promocodes", "referrals", "settings", "users", "winners"]
                 self.assertEqual(tables, expected)
 
         asyncio.run(_run())
@@ -150,25 +159,22 @@ class TestDatabaseSchema(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_winners_prize_constraint(self) -> None:
-        """CHECK constraint на prize в таблице winners работает."""
+    def test_winners_accept_custom_prizes(self) -> None:
+        """winners.prize принимает произвольные названия призов."""
         async def _run() -> None:
             async with aiosqlite.connect(self.db_path) as db:
                 await db.executescript(_SCHEMA_SQL)
-                # Валидный приз MacBook Neo
                 await db.execute(
                     "INSERT INTO users (id, ref_link) VALUES (1, 'abc')"
                 )
                 await db.execute(
-                    "INSERT INTO winners (user_id, prize) VALUES (1, 'MacBook Neo')"
+                    "INSERT INTO winners (user_id, prize) VALUES (1, 'Custom Prize')"
                 )
                 await db.commit()
 
-                # Невалидный приз
-                with self.assertRaises(Exception):
-                    await db.execute(
-                        "INSERT INTO winners (user_id, prize) VALUES (1, 'Invalid Prize')"
-                    )
+                async with db.execute("SELECT prize FROM winners WHERE user_id = 1") as cursor:
+                    row = await cursor.fetchone()
+                self.assertEqual(row[0], "Custom Prize")
 
         asyncio.run(_run())
 

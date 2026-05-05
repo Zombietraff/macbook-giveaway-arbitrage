@@ -4,7 +4,7 @@
 Логика:
 1. Выбрать кандидатов (tickets > 0, blocked_bot=False) и live-проверить подписку.
 2. Взвешенный рандом: random.choices с весами = tickets * hidden draw_multiplier.
-3. 4 уникальных победителя: первые 3 → MacBook Neo, 4-й → AirPods 3 Pro.
+3. Уникальные победители получают призы из настроенного списка contest_prizes.
 4. Попытка отправки сообщения; при ошибке → исключить и пересчитать.
 5. Запись в таблицу winners + лог.
 """
@@ -19,7 +19,7 @@ from aiogram import Bot
 
 from config import LOGS_DIR
 from db.database import get_db
-from db.models import add_winner
+from db.models import add_winner, get_draw_prize_list
 from utils.checks import check_subscription
 from utils.notifications import notify_winner
 
@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 DRAW_LOG = LOGS_DIR / "draw.log"
 
-PRIZES = ["MacBook Neo", "MacBook Neo", "MacBook Neo", "AirPods 3 Pro"]
+
+class DrawPrizesNotConfiguredError(RuntimeError):
+    """Призы конкурса не настроены, draw запускать нельзя."""
 
 
 def _log_draw(message: str) -> None:
@@ -107,7 +109,7 @@ async def _get_eligible_users(bot: Bot) -> list[dict]:
 
 async def perform_draw(bot: Bot) -> list[dict]:
     """
-    Выполнить розыгрыш: выбрать 4 уникальных победителей.
+    Выполнить розыгрыш и выдать настроенный список призов.
 
     Returns:
         Список победителей с призами.
@@ -116,12 +118,19 @@ async def perform_draw(bot: Bot) -> list[dict]:
     random.seed(seed)
     _log_draw(f"Начало розыгрыша. Seed: {seed}")
 
+    prize_list = await get_draw_prize_list()
+    prize_count = len(prize_list)
+    if prize_count == 0:
+        _log_draw("ОШИБКА: Призы конкурса не настроены")
+        raise DrawPrizesNotConfiguredError("Призы конкурса не настроены")
+    _log_draw(f"Настроенных призов: {prize_count}")
+
     # 1. Получить участников
     eligible = await _get_eligible_users(bot)
     _log_draw(f"Подходящих участников: {len(eligible)}")
 
-    if len(eligible) < 4:
-        _log_draw(f"ОШИБКА: Недостаточно участников ({len(eligible)} < 4)")
+    if len(eligible) < prize_count:
+        _log_draw(f"ОШИБКА: Недостаточно участников ({len(eligible)} < {prize_count})")
         return []
 
     # Лог весов
@@ -136,7 +145,7 @@ async def perform_draw(bot: Bot) -> list[dict]:
     remaining = list(eligible)
     draw_date = datetime.now()
 
-    for prize_idx, prize in enumerate(PRIZES):
+    for prize_idx, prize in enumerate(prize_list):
         if not remaining:
             _log_draw("ОШИБКА: Не осталось кандидатов")
             break

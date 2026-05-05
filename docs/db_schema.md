@@ -66,8 +66,27 @@ Draw results.
 | --- | --- | --- |
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT` | Internal ID |
 | `user_id` | `INTEGER` | Winner user ID, FK to `users.id` |
-| `prize` | `TEXT` | `MacBook Neo` or `AirPods 3 Pro` |
+| `prize` | `TEXT NOT NULL` | Prize name from the configured contest prize list |
 | `draw_date` | `TIMESTAMP` | Draw date |
+
+## contest_prizes
+
+Configurable current contest prize list. Rows are ordered by `position`; lower
+positions are considered better/rarer prizes and are distributed first during
+`/draw`.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `INTEGER PRIMARY KEY AUTOINCREMENT` | Internal ID |
+| `position` | `INTEGER NOT NULL` | Prize order, best first |
+| `name` | `TEXT NOT NULL` | Prize display name |
+| `quantity` | `INTEGER NOT NULL` | Number of winners for this prize |
+| `created_by` | `INTEGER NOT NULL` | Admin/owner Telegram ID who last set the list |
+| `created_at` | `TIMESTAMP DEFAULT CURRENT_TIMESTAMP` | Creation time |
+
+`/draw` expands rows by `quantity`, for example `2 | Prize A` and `1 | Prize B`
+becomes `["Prize A", "Prize A", "Prize B"]`. If this table is empty, `/draw`
+is blocked.
 
 ## settings
 
@@ -218,6 +237,8 @@ Full snapshots created before owner reset clears current contest state.
 Reset behavior:
 
 - `users` are kept, but `tickets` becomes `0` and `last_check_at` becomes `NULL`.
+- `contest_prizes` is kept; admins can update it explicitly with `/set_prizes`
+  or clear it with `/clear_prizes`.
 - `winners`, `casino_spins`, `channels`, `promocodes`, `user_trust_scores`, and `temporary_admins` are cleared.
 - `settings`, `referrals`, `user_flags`, and `admin_audit_log` are not cleared.
 

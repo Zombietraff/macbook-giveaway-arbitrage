@@ -66,10 +66,10 @@ def webapp_auth(func):
 
 # Let's map emojis to React frontend strings
 SYMBOL_MAP = {
-    "CHERRY": 0.5,
-    "APPLE": 0.3,
-    "BANANA": 0.15,
-    "BAR": 0.05,
+    "CHERRY": 0.25,
+    "APPLE": 0.25,
+    "BANANA": 0.25,
+    "LEMON": 0.25,
 }
 
 def generate_spin_result() -> list[str]:
@@ -79,21 +79,24 @@ def generate_spin_result() -> list[str]:
     weights = list(SYMBOL_MAP.values())
     return random.choices(symbols, weights=weights, k=3)
 
-def calculate_spin_multiplier(symbols: list[str]) -> float:
-    # 3 of a kind
+def calculate_spin_payout(symbols: list[str]) -> int:
+    """Return base paytable payout. Pair payouts only use the first two reels."""
     if symbols[0] == symbols[1] == symbols[2]:
-        if symbols[0] == "BAR":
-            return 5.0
-        elif symbols[0] == "BANANA":
-            return 4.0
-        elif symbols[0] == "APPLE":
-            return 3.0
-        elif symbols[0] == "CHERRY":
-            return 2.0
-    # 2 of a kind
-    if symbols[0] == symbols[1] or symbols[1] == symbols[2] or symbols[0] == symbols[2]:
-        return 0.5
-    return 0.0
+        return {
+            "CHERRY": 50,
+            "APPLE": 20,
+            "BANANA": 15,
+            "LEMON": 5,
+        }.get(symbols[0], 0)
+
+    if symbols[0] == symbols[1]:
+        return {
+            "CHERRY": 40,
+            "APPLE": 10,
+            "BANANA": 5,
+        }.get(symbols[0], 0)
+
+    return 0
 
 @webapp_auth
 async def get_user_balance(request: web.Request):
@@ -168,10 +171,10 @@ async def spin_slot(request: web.Request):
             
             # Spin math
             symbols = generate_spin_result()
-            multiplier = calculate_spin_multiplier(symbols)
-            win_amount = int(bet_amount * multiplier)
+            base_payout = calculate_spin_payout(symbols)
+            win_amount = int(base_payout * bet_amount)
             
-            result_type = 'jackpot' if multiplier == 5.0 else ('win' if win_amount > 0 else 'loss')
+            result_type = 'jackpot' if base_payout == 50 else ('win' if win_amount > 0 else 'loss')
             
             # add win
             if win_amount > 0:
@@ -182,7 +185,7 @@ async def spin_slot(request: web.Request):
             # Log spin (this assumes the casino_spins table exists over in models.py which we know it does)
             await db.execute(
                 "INSERT INTO casino_spins (user_id, bet_amount, dice_value, result_type, multiplier, balance_before, balance_after) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, bet_amount, 0, result_type, multiplier, current_tickets, final_balance)
+                (user_id, bet_amount, 0, result_type, float(base_payout), current_tickets, final_balance)
             )
             
             await db.commit()
@@ -191,7 +194,7 @@ async def spin_slot(request: web.Request):
                 "symbols": symbols,
                 "win": win_amount,
                 "coins": final_balance,
-                "multiplier": multiplier
+                "multiplier": base_payout
             })
             
         except Exception as e:
