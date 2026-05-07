@@ -15,10 +15,12 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
+from aiogram.types import CallbackQuery, Chat, Message, User
 
 # Мок .env
 _TEST_ENV = {
@@ -272,6 +274,178 @@ class TestChannelsKeyboard(unittest.TestCase):
         # Только 1 неподписанный канал + 1 кнопка проверки = 2 ряда
         self.assertEqual(len(buttons), 2)
         self.assertIn("Ch 2", buttons[0][0].text)
+
+
+class TestSubscriptionMiddleware(unittest.IsolatedAsyncioTestCase):
+    """Тесты глобальной проверки подписок в middleware."""
+
+    async def asyncSetUp(self) -> None:
+        self.tmp_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.tmp_file.name
+        self.tmp_file.close()
+
+        import db.database as database_mod
+
+        self.conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+        await self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.row_factory = aiosqlite.Row
+        await self.conn.executescript(_SCHEMA_SQL)
+        await self.conn.commit()
+        database_mod._connection = self.conn
+
+    async def asyncTearDown(self) -> None:
+        import db.database as database_mod
+
+        await self.conn.close()
+        database_mod._connection = None
+        os.unlink(self.db_path)
+
+    async def _create_user(self, user_id: int = 3001) -> User:
+        from db.models import create_user
+
+        await create_user(
+            user_id=user_id,
+            username=f"user{user_id}",
+            first_name="Name",
+            last_name="Test",
+            language_code="ru",
+            is_premium=False,
+            ref_link=f"ref{user_id}",
+        )
+        return User(id=user_id, is_bot=False, first_name="Name", username=f"user{user_id}")
+
+    @staticmethod
+    def _message(user: User, text: str = "👤 Профиль") -> Message:
+        return Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=user.id, type="private"),
+            from_user=user,
+            text=text,
+        )
+
+    @staticmethod
+    def _callback(user: User, data: str = "back_to_menu") -> CallbackQuery:
+        message = TestSubscriptionMiddleware._message(user)
+        return CallbackQuery(
+            id="cb1",
+            from_user=user,
+            chat_instance="chat1",
+            data=data,
+            message=message,
+        )
+
+    @staticmethod
+    def _data(user: User, bot: AsyncMock | None = None) -> dict:
+        return {
+            "event_from_user": user,
+            "bot": bot or AsyncMock(),
+            "lang": "ru",
+            "i18n": lambda key, **kwargs: key,
+        }
+
+    async def test_subscribed_user_reaches_handler(self) -> None:
+        from middlewares.subscription import SubscriptionMiddleware
+
+        user = await self._create_user()
+        handler = AsyncMock(return_value="ok")
+
+        with patch("middlewares.subscription.check_subscription", new=AsyncMock(return_value=(True, []))):
+            result = await SubscriptionMiddleware()(
+                handler,
+                self._message(user),
+                self._data(user),
+            )
+
+        self.assertEqual(result, "ok")
+        handler.assert_awaited_once()
+
+    async def test_unsubscribed_user_is_blocked_and_gets_missing_channels(self) -> None:
+        from middlewares.subscription import SubscriptionMiddleware
+
+        user = await self._create_user()
+        handler = AsyncMock()
+        unsubscribed = [
+            {"channel_id": "-100222", "title": "Missing", "invite_link": "https://t.me/missing"},
+        ]
+
+        with (
+            patch("middlewares.subscription.check_subscription", new=AsyncMock(return_value=(False, unsubscribed))),
+            patch.object(Message, "answer", new=AsyncMock()) as answer_mock,
+        ):
+            result = await SubscriptionMiddleware()(
+                handler,
+                self._message(user),
+                self._data(user),
+            )
+
+        self.assertIsNone(result)
+        handler.assert_not_awaited()
+        answer_mock.assert_awaited_once()
+        _, kwargs = answer_mock.call_args
+        keyboard = kwargs["reply_markup"]
+        self.assertEqual(keyboard.inline_keyboard[0][0].text, "📢 Missing")
+        self.assertEqual(keyboard.inline_keyboard[0][0].url, "https://t.me/missing")
+        self.assertEqual(keyboard.inline_keyboard[-1][0].callback_data, "check_subscription")
+
+    async def test_allowed_actions_skip_subscription_check(self) -> None:
+        from middlewares.subscription import SubscriptionMiddleware
+
+        user = await self._create_user()
+        handler = AsyncMock(return_value="ok")
+        check_mock = AsyncMock(return_value=(False, [{"channel_id": "-100222"}]))
+
+        with patch("middlewares.subscription.check_subscription", new=check_mock):
+            for event in (
+                self._message(user, "/start ref_abc"),
+                self._message(user, "🌐 Язык"),
+                self._callback(user, "check_subscription"),
+                self._callback(user, "lang_ru"),
+                self._callback(user, "lang_uk"),
+            ):
+                result = await SubscriptionMiddleware()(handler, event, self._data(user))
+                self.assertEqual(result, "ok")
+
+        check_mock.assert_not_awaited()
+        self.assertEqual(handler.await_count, 5)
+
+    async def test_admin_skips_subscription_check(self) -> None:
+        from middlewares.subscription import SubscriptionMiddleware
+
+        admin = User(id=111, is_bot=False, first_name="Admin")
+        handler = AsyncMock(return_value="ok")
+        check_mock = AsyncMock(return_value=(False, [{"channel_id": "-100222"}]))
+
+        with patch("middlewares.subscription.check_subscription", new=check_mock):
+            result = await SubscriptionMiddleware()(
+                handler,
+                self._message(admin),
+                self._data(admin),
+            )
+
+        self.assertEqual(result, "ok")
+        handler.assert_awaited_once()
+        check_mock.assert_not_awaited()
+
+    async def test_subscription_error_blocks_action(self) -> None:
+        from middlewares.subscription import SubscriptionMiddleware
+
+        user = await self._create_user()
+        handler = AsyncMock()
+
+        with (
+            patch("middlewares.subscription.check_subscription", new=AsyncMock(side_effect=RuntimeError("api error"))),
+            patch.object(Message, "answer", new=AsyncMock()) as answer_mock,
+        ):
+            result = await SubscriptionMiddleware()(
+                handler,
+                self._message(user),
+                self._data(user),
+            )
+
+        self.assertIsNone(result)
+        handler.assert_not_awaited()
+        answer_mock.assert_awaited_once_with("check_error")
 
 
 class TestTicketLogic(unittest.TestCase):

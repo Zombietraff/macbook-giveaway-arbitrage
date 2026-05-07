@@ -70,6 +70,7 @@ _SEND_CANCEL_DATA = "send_cancel"
 _ADMIN_MENU_PREFIX = "admin_menu:"
 _RESET_CONFIRM_PREFIX = "reset_contest:confirm:"
 _RESET_CANCEL_PREFIX = "reset_contest:cancel:"
+_PROMO_MENU_PREFIX = "admin_promos:"
 
 
 class AdminSendState(StatesGroup):
@@ -85,6 +86,13 @@ class AdminPrizeState(StatesGroup):
     """FSM-состояние для многострочной настройки призов."""
 
     waiting_prizes = State()
+
+
+class AdminPromoState(StatesGroup):
+    """FSM-состояние для добавления многоразовых промокодов."""
+
+    waiting_limit = State()
+    waiting_codes = State()
 
 
 async def _is_admin(user_id: int) -> bool:
@@ -147,6 +155,50 @@ def _parse_prize_lines(text: str) -> list[tuple[int, str]]:
     return prizes
 
 
+def _parse_promocode_limit(raw_value: str) -> int:
+    """Разобрать лимит использований промокода."""
+    try:
+        uses_limit = int(raw_value.strip())
+    except ValueError as exc:
+        raise ValueError("лимит должен быть целым числом") from exc
+    if uses_limit < 1:
+        raise ValueError("лимит должен быть больше 0")
+    return uses_limit
+
+
+def _split_promocode_codes(text: str) -> list[str]:
+    """Разобрать список промокодов из строк или пробелов."""
+    return [code.strip() for code in text.replace("\n", " ").split(" ") if code.strip()]
+
+
+def _parse_add_promocode_payload(text: str) -> tuple[str, int]:
+    """Разобрать payload /add_promocode: CODE [uses_limit]."""
+    tokens = [token.strip() for token in text.split() if token.strip()]
+    if not tokens:
+        raise ValueError("укажите промокод")
+    if len(tokens) == 1:
+        return tokens[0], 1
+    return tokens[0], _parse_promocode_limit(tokens[1])
+
+
+def _parse_add_promocodes_payload(text: str) -> tuple[list[str], int]:
+    """Разобрать payload /add_promocodes: [uses_limit] CODE1 CODE2 ..."""
+    tokens = [token.strip() for token in text.replace("\n", " ").split(" ") if token.strip()]
+    if not tokens:
+        raise ValueError("укажите хотя бы один промокод")
+
+    if tokens[0].lstrip("-").isdigit():
+        uses_limit = _parse_promocode_limit(tokens[0])
+        codes = tokens[1:]
+    else:
+        uses_limit = 1
+        codes = tokens
+
+    if not codes:
+        raise ValueError("укажите хотя бы один промокод")
+    return codes, uses_limit
+
+
 def _format_prize_rows(prizes: list[Any]) -> str:
     """Сформировать человекочитаемый список призов."""
     if not prizes:
@@ -160,6 +212,31 @@ def _format_prize_rows(prizes: list[Any]) -> str:
             f"{escape(str(row['name']))}"
         )
     return "\n".join(lines)
+
+
+def _format_promocode_rows(promocodes: list[Any]) -> str:
+    """Сформировать список промокодов с лимитами."""
+    if not promocodes:
+        return "📭 Промокоды не добавлены."
+
+    lines = ["🥚 <b>Промокоды</b>"]
+    for promo in promocodes:
+        lines.append(
+            f"• <code>{escape(str(promo['code']))}</code> — "
+            f"<b>{int(promo['uses_count'] or 0)}/{int(promo['uses_limit'] or 1)}</b>"
+        )
+    return "\n".join(lines)
+
+
+def _get_promocode_menu_keyboard() -> InlineKeyboardMarkup:
+    """Inline-меню действий с промокодами."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить промокоды", callback_data=f"{_PROMO_MENU_PREFIX}add")],
+            [InlineKeyboardButton(text="📋 Список промокодов", callback_data=f"{_PROMO_MENU_PREFIX}list")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"{_PROMO_MENU_PREFIX}cancel")],
+        ]
+    )
 
 
 def _get_send_preview_keyboard() -> InlineKeyboardMarkup:
@@ -244,8 +321,9 @@ _ADMIN_MENU_HELP = {
     ),
     "promos": (
         "🥚 Промокоды:\n"
-        "/add_promocode <code>\n"
-        "/add_promocodes <code1> <code2> ..."
+        "/add_promocode <code> [uses_limit]\n"
+        "/add_promocodes [uses_limit] <code1> <code2> ...\n"
+        "/list_promocodes"
     ),
     "admins": "👑 Временные админы: /list_admins, /add_admin <telegram_id>, /remove_admin <telegram_id>",
     "plugins": "🎮 Мини-игры: /list_plugins, /set_plugin <plugin_key>",
@@ -364,7 +442,52 @@ async def admin_menu_help(callback: CallbackQuery, **kwargs: Any) -> None:
 
     await callback.answer()
     if callback.message:
+        if section == "promos":
+            await callback.message.answer(
+                "🥚 <b>Промокоды</b>\nВыберите действие.",
+                reply_markup=_get_promocode_menu_keyboard(),
+            )
+            return
         await callback.message.answer(_ADMIN_MENU_HELP.get(section, "Раздел не найден."))
+
+
+@router.callback_query(F.data.startswith(_PROMO_MENU_PREFIX))
+async def admin_promocode_menu(callback: CallbackQuery, state: FSMContext, **kwargs: Any) -> None:
+    """Inline-меню управления промокодами."""
+    if not await _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    action = callback.data.removeprefix(_PROMO_MENU_PREFIX)
+    await callback.answer()
+
+    if action == "cancel":
+        if callback.message:
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        return
+
+    if action == "list":
+        if callback.message:
+            await callback.message.answer(_format_promocode_rows(await get_all_promocodes(limit=50)))
+        _log_admin_action(callback.from_user.id, "list_promocodes")
+        return
+
+    if action == "add":
+        await state.set_state(AdminPromoState.waiting_limit)
+        if callback.message:
+            await callback.message.answer(
+                "🥚 Введите лимит использований для каждого промокода.\n"
+                "Например: <code>5</code>\n\n"
+                "Для отмены отправьте /cancel."
+            )
+        _log_admin_action(callback.from_user.id, "promocode_add_started")
+        return
+
+    if callback.message:
+        await callback.message.answer("Раздел промокодов не найден.")
 
 
 @router.message(Command("add_admin"))
@@ -511,14 +634,26 @@ async def admin_add_promocode(message: Message, **kwargs: Any) -> None:
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
-        await message.answer("⚠️ Формат: <code>/add_promocode code</code>")
+        await message.answer("⚠️ Формат: <code>/add_promocode code [uses_limit]</code>")
         return
 
-    code = parts[1].strip()
-    await add_promocode(code)
-    await add_admin_audit_log(message.from_user.id, "add_promocode", payload={"code": code})
-    await message.answer(f"✅ Промокод добавлен: <code>{code}</code>")
-    _log_admin_action(message.from_user.id, f"add_promocode: {code}")
+    try:
+        code, uses_limit = _parse_add_promocode_payload(parts[1])
+    except ValueError as exc:
+        await message.answer(f"⚠️ {escape(str(exc))}. Формат: <code>/add_promocode code [uses_limit]</code>")
+        return
+
+    await add_promocode(code, uses_limit=uses_limit)
+    await add_admin_audit_log(
+        message.from_user.id,
+        "add_promocode",
+        payload={"code": code, "uses_limit": uses_limit},
+    )
+    await message.answer(
+        f"✅ Промокод добавлен/обновлён: <code>{escape(code)}</code>\n"
+        f"Лимит использований: <b>{uses_limit}</b>"
+    )
+    _log_admin_action(message.from_user.id, f"add_promocode: {code}, uses_limit={uses_limit}")
 
 
 @router.message(Command("add_promocodes"))
@@ -529,20 +664,147 @@ async def admin_add_promocodes(message: Message, **kwargs: Any) -> None:
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("⚠️ Формат: <code>/add_promocodes code1 code2 ...</code>")
+        await message.answer("⚠️ Формат: <code>/add_promocodes [uses_limit] code1 code2 ...</code>")
         return
 
-    codes = [code.strip() for code in parts[1].replace("\n", " ").split(" ") if code.strip()]
+    try:
+        codes, uses_limit = _parse_add_promocodes_payload(parts[1])
+    except ValueError as exc:
+        await message.answer(f"⚠️ {escape(str(exc))}.")
+        return
+
+    for code in codes:
+        await add_promocode(code, uses_limit=uses_limit)
+
+    await add_admin_audit_log(
+        message.from_user.id,
+        "add_promocodes",
+        payload={"count": len(codes), "uses_limit": uses_limit},
+    )
+    await message.answer(
+        f"✅ Промокоды добавлены/обновлены: <b>{len(codes)}</b>\n"
+        f"Лимит использований: <b>{uses_limit}</b>"
+    )
+    _log_admin_action(message.from_user.id, f"add_promocodes: {len(codes)}, uses_limit={uses_limit}")
+
+
+@router.message(Command("list_promocodes"))
+async def admin_list_promocodes(message: Message, **kwargs: Any) -> None:
+    """Показать последние промокоды и остатки использований."""
+    if not await _is_admin(message.from_user.id):
+        return
+
+    await message.answer(_format_promocode_rows(await get_all_promocodes(limit=50)))
+    _log_admin_action(message.from_user.id, "list_promocodes")
+
+
+@router.message(AdminPromoState.waiting_limit, Command("cancel"))
+async def admin_promocode_add_cancel_limit(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    """Отменить добавление промокодов на шаге лимита."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer("❌ Добавление промокодов отменено.")
+    _log_admin_action(message.from_user.id, "promocode_add_cancelled")
+
+
+@router.message(AdminPromoState.waiting_limit, F.text.startswith("/"))
+async def admin_promocode_command_during_limit(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    """Не парсить slash-команды как лимит использований."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(
+        "❌ Добавление промокодов отменено. Команда не была выполнена, отправьте её ещё раз."
+    )
+    _log_admin_action(message.from_user.id, "promocode_add_cancelled_by_command")
+
+
+@router.message(AdminPromoState.waiting_limit)
+async def admin_promocode_receive_limit(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    """Принять лимит использований промокодов."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    if text.lower() in {"cancel", "отмена"}:
+        await state.clear()
+        await message.answer("❌ Добавление промокодов отменено.")
+        return
+
+    try:
+        uses_limit = _parse_promocode_limit(text)
+    except ValueError as exc:
+        await message.answer(f"❌ {escape(str(exc))}. Введите целое число больше 0.")
+        return
+
+    await state.update_data(promocode_uses_limit=uses_limit)
+    await state.set_state(AdminPromoState.waiting_codes)
+    await message.answer(
+        "Теперь отправьте промокоды: каждый с новой строки или через пробел.\n"
+        "Для отмены отправьте /cancel."
+    )
+
+
+@router.message(AdminPromoState.waiting_codes, Command("cancel"))
+async def admin_promocode_add_cancel_codes(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    """Отменить добавление промокодов на шаге списка."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer("❌ Добавление промокодов отменено.")
+    _log_admin_action(message.from_user.id, "promocode_add_cancelled")
+
+
+@router.message(AdminPromoState.waiting_codes, F.text.startswith("/"))
+async def admin_promocode_command_during_input(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    """Не парсить slash-команды как промокоды."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(
+        "❌ Добавление промокодов отменено. Команда не была выполнена, отправьте её ещё раз."
+    )
+    _log_admin_action(message.from_user.id, "promocode_add_cancelled_by_command")
+
+
+@router.message(AdminPromoState.waiting_codes)
+async def admin_promocode_receive_codes(message: Message, state: FSMContext, **kwargs: Any) -> None:
+    """Принять список промокодов из FSM-панели."""
+    if not await _is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    codes = _split_promocode_codes(message.text or "")
     if not codes:
         await message.answer("⚠️ Укажите хотя бы один промокод.")
         return
 
+    data = await state.get_data()
+    uses_limit = int(data.get("promocode_uses_limit") or 1)
     for code in codes:
-        await add_promocode(code)
+        await add_promocode(code, uses_limit=uses_limit)
 
-    await add_admin_audit_log(message.from_user.id, "add_promocodes", payload={"count": len(codes)})
-    await message.answer(f"✅ Промокоды добавлены: <b>{len(codes)}</b>")
-    _log_admin_action(message.from_user.id, f"add_promocodes: {len(codes)}")
+    await add_admin_audit_log(
+        message.from_user.id,
+        "add_promocodes_panel",
+        payload={"count": len(codes), "uses_limit": uses_limit},
+    )
+    await state.clear()
+    await message.answer(
+        f"✅ Промокоды добавлены/обновлены: <b>{len(codes)}</b>\n"
+        f"Лимит использований: <b>{uses_limit}</b>"
+    )
+    _log_admin_action(message.from_user.id, f"add_promocodes_panel: {len(codes)}, uses_limit={uses_limit}")
 
 
 @router.message(Command("set_prizes"))
@@ -870,14 +1132,18 @@ async def admin_stats(message: Message, **kwargs: Any) -> None:
 
     async with db.execute("SELECT COUNT(*) FROM users") as cur:
         total_users = (await cur.fetchone())[0]
-    async with db.execute("SELECT COUNT(*) FROM users WHERE tickets > 0") as cur:
+    async with db.execute("SELECT COUNT(*) FROM users WHERE tickets > 0 AND blocked_bot = FALSE") as cur:
         active_users = (await cur.fetchone())[0]
-    async with db.execute("SELECT SUM(tickets) FROM users") as cur:
+    async with db.execute(
+        "SELECT COALESCE(SUM(tickets), 0) FROM users WHERE tickets > 0 AND blocked_bot = FALSE"
+    ) as cur:
         total_tickets = (await cur.fetchone())[0] or 0
     async with db.execute("SELECT COUNT(*) FROM referrals WHERE status='completed'") as cur:
         total_referrals = (await cur.fetchone())[0]
-    async with db.execute("SELECT COUNT(*) FROM promocodes WHERE used_by IS NOT NULL") as cur:
-        used_promos = (await cur.fetchone())[0]
+    async with db.execute("SELECT COALESCE(SUM(uses_count), 0) FROM promocodes") as cur:
+        used_promos = (await cur.fetchone())[0] or 0
+    async with db.execute("SELECT COUNT(*) FROM promocodes WHERE uses_count >= uses_limit") as cur:
+        exhausted_promos = (await cur.fetchone())[0]
     async with db.execute("SELECT COUNT(*) FROM users WHERE blocked_bot=TRUE") as cur:
         blocked = (await cur.fetchone())[0]
 
@@ -888,9 +1154,10 @@ async def admin_stats(message: Message, **kwargs: Any) -> None:
         "📊 <b>Статистика конкурса</b>\n\n"
         f"👥 Всего пользователей: <b>{total_users}</b>\n"
         f"✅ Активных участников: <b>{active_users}</b>\n"
-        f"🎫 Всего билетов: <b>{int(total_tickets)}</b>\n"
+        f"🎫 Всего билетов: <b>{_fmt_amount(float(total_tickets))}</b>\n"
         f"👥 Рефералов (completed): <b>{total_referrals}</b>\n"
         f"🥚 Промокодов использовано: <b>{used_promos}</b>\n"
+        f"🔒 Промокодов исчерпано: <b>{exhausted_promos}</b>\n"
         f"🚫 Заблокировали бота: <b>{blocked}</b>\n\n"
         f"📅 Дата окончания: <b>{end_date_str}</b>"
     )

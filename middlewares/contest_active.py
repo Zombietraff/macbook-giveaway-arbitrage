@@ -32,7 +32,7 @@ _ALLOWED_AFTER_END = frozenset({
 _ADMIN_COMMANDS = frozenset({
     "/draw", "/admin_stats", "/casino_stats", "/refresh_menu", "/send", "/set_date", "/start", "/cancel",
     "/admin_menu", "/owner_menu", "/add_admin", "/remove_admin", "/list_admins",
-    "/add_channel", "/remove_channel", "/list_channels", "/add_promocode", "/add_promocodes",
+    "/add_channel", "/remove_channel", "/list_channels", "/add_promocode", "/add_promocodes", "/list_promocodes",
     "/set_prizes", "/list_prizes", "/clear_prizes",
     "/list_plugins", "/set_plugin", "/webapp_url", "/reset_contest", "/reset_history", "/trust_stats",
 })

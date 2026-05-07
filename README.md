@@ -145,8 +145,8 @@ npm run webapp:url -- --from-pinggy-debugger --check
 - `/add_channel <channel_id> | <title> | <invite_link>` / `/remove_channel <channel_id>` / `/list_channels`
   **Описание:** Управление каналами обязательной подписки для owner/temp admin.
 
-- `/add_promocode <code>` / `/add_promocodes <code1> <code2> ...`
-  **Описание:** Создание одного или нескольких промокодов для owner/temp admin.
+- `/add_promocode <code> [uses_limit]` / `/add_promocodes [uses_limit] <code1> <code2> ...` / `/list_promocodes`
+  **Описание:** Создание и просмотр промокодов для owner/temp admin. Каждый промокод можно использовать заданное количество раз, но один пользователь может активировать конкретный код только один раз.
 
 - `/set_prizes` / `/list_prizes` / `/clear_prizes`
   **Описание:** Настройка списка призов текущего конкурса для owner/temp admin. `/set_prizes` принимает многострочный формат `<quantity> | <prize name>`, порядок сверху вниз используется как порядок выдачи призов в `/draw`.
@@ -190,7 +190,7 @@ npm run webapp:url -- --from-pinggy-debugger --check
 ### Терминальные скрипты (CLI)
 
 - `uv run python scripts/add_channels.py` — Интерактивный терминальный интерфейс для добавления каналов спонсоров. Запросит ID канала, его название и ссылку на вступление.
-- `uv run python scripts/add_promocodes.py` — Генератор/загрузчик скрытых пасхалок (промокодов) в БД, которые пользователи смогут находить у вас в соц-сетях.
+- `uv run python scripts/add_promocodes.py [--uses-limit N]` — Генератор/загрузчик скрытых пасхалок (промокодов) в БД. По умолчанию добавляет коды с лимитом 1 использование на код.
 - `uv run python scripts/init_userbot_session.py` — Первичная авторизация Telethon userbot session для скрытой проверки common groups.
 - `uv run python scripts/diagnose_draw.py` — Аудит здоровья розыгрыша. Запуск скрипта анализирует готовность базы данных к `/draw` (хватает ли участников и настроены ли все ключи).
 

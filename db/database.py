@@ -48,15 +48,30 @@ CREATE TABLE IF NOT EXISTS channels (
     invite_link  TEXT                               -- https://t.me/...
 );
 
--- promocodes: пасхалки (одноразовые глобально)
+-- promocodes: пасхалки с ограниченным общим числом использований
 CREATE TABLE IF NOT EXISTS promocodes (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     code         TEXT UNIQUE,
     channel_id   INTEGER,                          -- привязка к каналу (опционально)
-    used_by      INTEGER,
-    activated_at TIMESTAMP,
+    used_by      INTEGER,                          -- legacy: старое одноразовое использование
+    activated_at TIMESTAMP,                        -- legacy: старая дата одноразового использования
+    uses_limit   INTEGER NOT NULL DEFAULT 1,
+    uses_count   INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(used_by) REFERENCES users(id)
 );
+
+-- promocode_activations: история активаций многоразовых промокодов
+CREATE TABLE IF NOT EXISTS promocode_activations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    promocode_id INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(promocode_id, user_id),
+    FOREIGN KEY(promocode_id) REFERENCES promocodes(id),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_promocode_activations_user ON promocode_activations(user_id);
 
 -- referrals: история приглашений
 CREATE TABLE IF NOT EXISTS referrals (
@@ -263,10 +278,25 @@ CREATE TABLE IF NOT EXISTS contest_reset_promocodes (
     channel_id   INTEGER,
     used_by      INTEGER,
     activated_at TIMESTAMP,
+    uses_limit   INTEGER NOT NULL DEFAULT 1,
+    uses_count   INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_contest_reset_promocodes_reset ON contest_reset_promocodes(reset_id);
+
+-- contest_reset_promocode_activations: архив активаций промокодов перед reset
+CREATE TABLE IF NOT EXISTS contest_reset_promocode_activations (
+    reset_id                INTEGER NOT NULL,
+    original_id             INTEGER NOT NULL,
+    original_promocode_id   INTEGER NOT NULL,
+    user_id                 INTEGER NOT NULL,
+    activated_at            TIMESTAMP,
+    FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contest_reset_promocode_activations_reset
+    ON contest_reset_promocode_activations(reset_id);
 
 -- contest_reset_temporary_admins: архив temporary_admins перед reset
 CREATE TABLE IF NOT EXISTS contest_reset_temporary_admins (
@@ -300,11 +330,77 @@ async def _ensure_column(
 async def _run_schema_migrations(db: aiosqlite.Connection) -> None:
     """Лёгкие совместимые миграции для уже существующих SQLite таблиц."""
     await _migrate_winners_prize_constraint(db)
+    await _migrate_promocode_usage_limits(db)
     await _ensure_column(
         db,
         "contest_reset_runs",
         "trust_scores_count",
         "INTEGER NOT NULL DEFAULT 0",
+    )
+
+
+async def _migrate_promocode_usage_limits(db: aiosqlite.Connection) -> None:
+    """Добавить многоразовые промокоды без переноса legacy used_by в историю."""
+    await _ensure_column(
+        db,
+        "promocodes",
+        "uses_limit",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
+    await _ensure_column(
+        db,
+        "promocodes",
+        "uses_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS promocode_activations (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            promocode_id INTEGER NOT NULL,
+            user_id      INTEGER NOT NULL,
+            activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(promocode_id, user_id),
+            FOREIGN KEY(promocode_id) REFERENCES promocodes(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """
+    )
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_promocode_activations_user
+        ON promocode_activations(user_id)
+        """
+    )
+    await _ensure_column(
+        db,
+        "contest_reset_promocodes",
+        "uses_limit",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
+    await _ensure_column(
+        db,
+        "contest_reset_promocodes",
+        "uses_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contest_reset_promocode_activations (
+            reset_id                INTEGER NOT NULL,
+            original_id             INTEGER NOT NULL,
+            original_promocode_id   INTEGER NOT NULL,
+            user_id                 INTEGER NOT NULL,
+            activated_at            TIMESTAMP,
+            FOREIGN KEY(reset_id) REFERENCES contest_reset_runs(id)
+        )
+        """
+    )
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_contest_reset_promocode_activations_reset
+        ON contest_reset_promocode_activations(reset_id)
+        """
     )
 
 

@@ -64,21 +64,22 @@ class TestPromocodeActivation(unittest.TestCase):
 
                 await create_user(100, "user", "A", "B", "ru", False, "ref1")
                 await add_user_tickets(100, 1.0)  # базовый билет
-                await add_promocode("TEST_CODE")
+                await add_promocode("TEST_CODE", uses_limit=2)
 
                 # Проверяем промокод
                 promo = await get_promocode("TEST_CODE")
                 self.assertIsNotNone(promo)
-                self.assertIsNone(promo["used_by"])
+                self.assertEqual(promo["uses_limit"], 2)
+                self.assertEqual(promo["uses_count"], 0)
 
                 # Активируем
-                await activate_promocode("TEST_CODE", 100)
+                result = await activate_promocode("TEST_CODE", 100)
+                self.assertEqual(result, "activated")
                 await add_user_tickets(100, 5.0)
 
                 # Проверяем результат
                 promo = await get_promocode("TEST_CODE")
-                self.assertEqual(promo["used_by"], 100)
-                self.assertIsNotNone(promo["activated_at"])
+                self.assertEqual(promo["uses_count"], 1)
 
                 user = await get_user(100)
                 self.assertEqual(user["tickets"], 6.0)  # 1.0 + 5.0
@@ -89,8 +90,8 @@ class TestPromocodeActivation(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_already_used_promocode(self) -> None:
-        """Уже использованный промокод нельзя активировать повторно."""
+    def test_promocode_limited_uses_and_one_use_per_user(self) -> None:
+        """Промокод можно использовать до лимита, но один пользователь — один раз."""
         async def _run() -> None:
             import db.database as database_mod
             conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
@@ -110,15 +111,17 @@ class TestPromocodeActivation(unittest.TestCase):
 
                 await create_user(100, "u1", "A", "B", "ru", False, "r1")
                 await create_user(200, "u2", "C", "D", "ru", False, "r2")
-                await add_promocode("ONCE_CODE")
+                await create_user(300, "u3", "E", "F", "ru", False, "r3")
+                await add_promocode("LIMIT_CODE", uses_limit=2)
 
-                # Первый юзер активирует
-                await activate_promocode("ONCE_CODE", 100)
+                self.assertEqual(await activate_promocode("LIMIT_CODE", 100), "activated")
+                self.assertEqual(await activate_promocode("LIMIT_CODE", 100), "already_used_by_user")
+                self.assertEqual(await activate_promocode("LIMIT_CODE", 200), "activated")
+                self.assertEqual(await activate_promocode("LIMIT_CODE", 300), "exhausted")
 
-                # Промокод уже занят
-                promo = await get_promocode("ONCE_CODE")
-                self.assertIsNotNone(promo["used_by"])
-                self.assertEqual(promo["used_by"], 100)
+                promo = await get_promocode("LIMIT_CODE")
+                self.assertEqual(promo["uses_count"], 2)
+                self.assertEqual(promo["uses_limit"], 2)
 
             finally:
                 await conn.close()
@@ -141,6 +144,83 @@ class TestPromocodeActivation(unittest.TestCase):
                 from db.models import get_promocode
                 promo = await get_promocode("FAKE_CODE")
                 self.assertIsNone(promo)
+            finally:
+                await conn.close()
+                database_mod._connection = None
+
+        asyncio.run(_run())
+
+    def test_readding_promocode_updates_limit_without_resetting_count(self) -> None:
+        """Повторное добавление существующего кода обновляет лимит без сброса uses_count."""
+        async def _run() -> None:
+            import db.database as database_mod
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                from db.models import activate_promocode, add_promocode, create_user, get_promocode
+
+                await create_user(100, "u1", "A", "B", "ru", False, "r1")
+                await add_promocode("UPDATE_LIMIT", uses_limit=1)
+                self.assertEqual(await activate_promocode("UPDATE_LIMIT", 100), "activated")
+
+                await add_promocode("UPDATE_LIMIT", uses_limit=5)
+                promo = await get_promocode("UPDATE_LIMIT")
+                self.assertEqual(promo["uses_count"], 1)
+                self.assertEqual(promo["uses_limit"], 5)
+            finally:
+                await conn.close()
+                database_mod._connection = None
+
+        asyncio.run(_run())
+
+    def test_promocode_handler_shows_specific_activation_failures(self) -> None:
+        """Handler показывает разные тексты для разных причин отказа."""
+        async def _run() -> None:
+            import db.database as database_mod
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                from db.models import create_user
+                from handlers.promocode import process_promo_code
+
+                await create_user(100, "u1", "A", "B", "ru", False, "r1")
+
+                expected_keys = {
+                    "not_found": "promo_not_found",
+                    "already_used_by_user": "promo_already_used_by_user",
+                    "exhausted": "promo_exhausted",
+                }
+                for status, expected_key in expected_keys.items():
+                    message = SimpleNamespace(
+                        from_user=SimpleNamespace(id=100),
+                        text="PROMO",
+                        answer=AsyncMock(),
+                    )
+                    state = AsyncMock()
+                    with (
+                        patch("handlers.promocode.check_subscription", new=AsyncMock(return_value=(True, []))),
+                        patch("handlers.promocode.activate_promocode", new=AsyncMock(return_value=status)),
+                    ):
+                        await process_promo_code(
+                            message=message,
+                            bot=AsyncMock(),
+                            state=state,
+                            i18n=lambda key, **kwargs: key,
+                            lang="ru",
+                        )
+
+                    self.assertEqual(message.answer.call_args_list[0].args[0], expected_key)
+                    state.clear.assert_awaited()
             finally:
                 await conn.close()
                 database_mod._connection = None
@@ -560,6 +640,68 @@ class TestContestPrizes(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_promocode_usage_limit_migration_gives_legacy_codes_one_new_use(self) -> None:
+        """Старые used_by промокоды после миграции получают uses_limit=1 и uses_count=0."""
+        async def _run() -> None:
+            import db.database as database_mod
+            from db.database import _migrate_promocode_usage_limits
+
+            conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = aiosqlite.Row
+            try:
+                await conn.executescript(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        ref_link TEXT UNIQUE
+                    );
+                    CREATE TABLE promocodes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        code TEXT UNIQUE,
+                        channel_id INTEGER,
+                        used_by INTEGER,
+                        activated_at TIMESTAMP,
+                        FOREIGN KEY(used_by) REFERENCES users(id)
+                    );
+                    CREATE TABLE contest_reset_promocodes (
+                        reset_id INTEGER NOT NULL,
+                        original_id INTEGER NOT NULL,
+                        code TEXT,
+                        channel_id INTEGER,
+                        used_by INTEGER,
+                        activated_at TIMESTAMP
+                    );
+                    INSERT INTO users (id, ref_link) VALUES (100, 'r100'), (200, 'r200');
+                    INSERT INTO promocodes (code, used_by, activated_at)
+                    VALUES ('OLD_USED', 100, '2026-01-01T00:00:00');
+                    """
+                )
+                await conn.commit()
+                database_mod._connection = conn
+
+                await _migrate_promocode_usage_limits(conn)
+                await conn.commit()
+
+                async with conn.execute("SELECT * FROM promocodes WHERE code = 'OLD_USED'") as cursor:
+                    promo = await cursor.fetchone()
+                self.assertEqual(promo["uses_limit"], 1)
+                self.assertEqual(promo["uses_count"], 0)
+
+                async with conn.execute("SELECT COUNT(*) FROM promocode_activations") as cursor:
+                    self.assertEqual((await cursor.fetchone())[0], 0)
+
+                from db.models import activate_promocode, get_promocode
+
+                self.assertEqual(await activate_promocode("OLD_USED", 100), "activated")
+                self.assertEqual(await activate_promocode("OLD_USED", 200), "exhausted")
+                promo = await get_promocode("OLD_USED")
+                self.assertEqual(promo["uses_count"], 1)
+            finally:
+                await conn.close()
+                database_mod._connection = None
+
+        asyncio.run(_run())
+
 
 class TestAdminFunctions(unittest.TestCase):
     """Тесты админ-функций."""
@@ -576,6 +718,70 @@ class TestAdminFunctions(unittest.TestCase):
             _parse_prize_lines("Prize without quantity")
         with self.assertRaises(ValueError):
             _parse_prize_lines("0 | Prize")
+
+    def test_parse_promocode_admin_payloads(self) -> None:
+        """Парсеры админ-команд промокодов принимают лимиты и старый формат."""
+        from handlers.admin import _parse_add_promocode_payload, _parse_add_promocodes_payload
+
+        self.assertEqual(_parse_add_promocode_payload("CODE 5"), ("CODE", 5))
+        self.assertEqual(_parse_add_promocode_payload("CODE"), ("CODE", 1))
+        self.assertEqual(_parse_add_promocodes_payload("5 CODE1 CODE2"), (["CODE1", "CODE2"], 5))
+        self.assertEqual(_parse_add_promocodes_payload("CODE1 CODE2"), (["CODE1", "CODE2"], 1))
+        with self.assertRaises(ValueError):
+            _parse_add_promocode_payload("CODE 0")
+        with self.assertRaises(ValueError):
+            _parse_add_promocodes_payload("0 CODE1")
+
+    def test_admin_stats_counts_only_active_contest_tickets(self) -> None:
+        """Статистика билетов конкурса не включает blocked/nonpositive и не обрезает дроби."""
+        async def _run() -> None:
+            tmp_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+            db_path = tmp_file.name
+            tmp_file.close()
+
+            import db.database as database_mod
+            from db.models import create_user, set_user_blocked, update_user_tickets
+            from handlers.admin import admin_stats
+
+            conn = await aiosqlite.connect(db_path, check_same_thread=False)
+            conn.row_factory = aiosqlite.Row
+            await conn.executescript(_SCHEMA_SQL)
+            await conn.commit()
+            database_mod._connection = conn
+
+            try:
+                await create_user(100, "u100", "A", "B", "ru", False, "stats100")
+                await create_user(200, "u200", "C", "D", "ru", False, "stats200")
+                await create_user(300, "u300", "E", "F", "ru", False, "stats300")
+                await create_user(400, "u400", "G", "H", "ru", False, "stats400")
+                await create_user(500, "u500", "I", "J", "ru", False, "stats500")
+
+                await update_user_tickets(100, 1.5)
+                await update_user_tickets(200, 2.0)
+                await update_user_tickets(300, 10.0)
+                await update_user_tickets(400, 0.0)
+                await update_user_tickets(500, -3.0)
+                await set_user_blocked(300, True)
+
+                message = SimpleNamespace(
+                    from_user=SimpleNamespace(id=111),
+                    answer=AsyncMock(),
+                )
+                with (
+                    patch("handlers.admin._is_admin", new=AsyncMock(return_value=True)),
+                    patch("handlers.admin._log_admin_action"),
+                ):
+                    await admin_stats(message)
+
+                text = message.answer.call_args.args[0]
+                self.assertIn("✅ Активных участников: <b>2</b>", text)
+                self.assertIn("🎫 Всего билетов: <b>3.5</b>", text)
+            finally:
+                await conn.close()
+                database_mod._connection = None
+                os.unlink(db_path)
+
+        asyncio.run(_run())
 
     def test_set_prizes_cancel_clears_state(self) -> None:
         """Команда /cancel выводит админа из FSM-ввода призов."""
@@ -801,6 +1007,7 @@ class TestAdminFunctions(unittest.TestCase):
                 add_temporary_admin,
                 add_user_tickets,
                 add_winner,
+                activate_promocode,
                 create_referral,
                 create_user,
                 get_trust_stats,
@@ -836,7 +1043,8 @@ class TestAdminFunctions(unittest.TestCase):
 
                 await add_winner(100, "Archived Prize", datetime.now())
                 await add_channel("-1001", "Channel", "https://t.me/example")
-                await add_promocode("RESET_CODE")
+                await add_promocode("RESET_CODE", uses_limit=3)
+                self.assertEqual(await activate_promocode("RESET_CODE", 100), "activated")
                 await add_temporary_admin(333, added_by=111, username="temp", first_name="Temp")
                 await conn.execute(
                     """
@@ -877,6 +1085,7 @@ class TestAdminFunctions(unittest.TestCase):
                     "winners": 0,
                     "casino_spins": 0,
                     "channels": 0,
+                    "promocode_activations": 0,
                     "promocodes": 0,
                     "user_trust_scores": 0,
                     "temporary_admins": 0,
@@ -897,6 +1106,7 @@ class TestAdminFunctions(unittest.TestCase):
                     "contest_reset_casino_spins": 1,
                     "contest_reset_channels": 1,
                     "contest_reset_promocodes": 1,
+                    "contest_reset_promocode_activations": 1,
                     "contest_reset_user_trust_scores": 1,
                     "contest_reset_temporary_admins": 1,
                 }
@@ -906,6 +1116,14 @@ class TestAdminFunctions(unittest.TestCase):
                         (reset_id,),
                     ) as cursor:
                         self.assertEqual((await cursor.fetchone())[0], expected, table)
+
+                async with conn.execute(
+                    "SELECT uses_limit, uses_count FROM contest_reset_promocodes WHERE reset_id = ?",
+                    (reset_id,),
+                ) as cursor:
+                    archived_promo = await cursor.fetchone()
+                self.assertEqual(archived_promo["uses_limit"], 3)
+                self.assertEqual(archived_promo["uses_count"], 1)
 
                 runs = await get_contest_reset_runs()
                 self.assertEqual(runs[0]["id"], reset_id)

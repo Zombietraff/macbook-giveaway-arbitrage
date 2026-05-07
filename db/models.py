@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import json
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import aiosqlite
 
@@ -177,6 +177,14 @@ async def update_channel(channel_id: str, title: str, invite_link: str) -> None:
 #  PROMOCODES
 # ════════════════════════════════════════════════════════════
 
+PromocodeActivationStatus = Literal[
+    "not_found",
+    "already_used_by_user",
+    "exhausted",
+    "activated",
+]
+
+
 async def get_promocode(code: str) -> Optional[aiosqlite.Row]:
     """Получить промокод по коду."""
     db = await get_db()
@@ -186,22 +194,84 @@ async def get_promocode(code: str) -> Optional[aiosqlite.Row]:
         return await cursor.fetchone()
 
 
-async def activate_promocode(code: str, user_id: int) -> None:
-    """Активировать промокод: установить used_by и activated_at."""
+async def activate_promocode(code: str, user_id: int) -> PromocodeActivationStatus:
+    """Атомарно активировать промокод для пользователя."""
     db = await get_db()
-    await db.execute(
-        "UPDATE promocodes SET used_by = ?, activated_at = ? WHERE code = ?",
-        (user_id, datetime.now(UTC).isoformat(), code),
-    )
-    await db.commit()
+    now = datetime.now(UTC).isoformat()
+    await db.execute("BEGIN IMMEDIATE")
+    try:
+        async with db.execute(
+            "SELECT * FROM promocodes WHERE code = ?",
+            (code,),
+        ) as cursor:
+            promo = await cursor.fetchone()
+
+        if promo is None:
+            await db.rollback()
+            return "not_found"
+
+        promocode_id = int(promo["id"])
+        async with db.execute(
+            """
+            SELECT 1
+            FROM promocode_activations
+            WHERE promocode_id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (promocode_id, user_id),
+        ) as cursor:
+            if await cursor.fetchone() is not None:
+                await db.rollback()
+                return "already_used_by_user"
+
+        uses_count = int(promo["uses_count"] or 0)
+        uses_limit = int(promo["uses_limit"] or 1)
+        if uses_count >= uses_limit:
+            await db.rollback()
+            return "exhausted"
+
+        await db.execute(
+            """
+            INSERT INTO promocode_activations (promocode_id, user_id, activated_at)
+            VALUES (?, ?, ?)
+            """,
+            (promocode_id, user_id, now),
+        )
+        await db.execute(
+            """
+            UPDATE promocodes
+            SET uses_count = uses_count + 1
+            WHERE id = ?
+            """,
+            (promocode_id,),
+        )
+        await db.commit()
+        return "activated"
+    except Exception:
+        await db.rollback()
+        raise
 
 
-async def add_promocode(code: str, channel_id: Optional[int] = None) -> None:
-    """Добавить промокод в БД."""
+async def add_promocode(
+    code: str,
+    uses_limit: int = 1,
+    channel_id: Optional[int] = None,
+) -> None:
+    """Добавить промокод или обновить лимит существующего."""
+    uses_limit = int(uses_limit)
+    if uses_limit < 1:
+        raise ValueError("uses_limit must be >= 1")
+
     db = await get_db()
     await db.execute(
-        "INSERT OR IGNORE INTO promocodes (code, channel_id) VALUES (?, ?)",
-        (code, channel_id),
+        """
+        INSERT INTO promocodes (code, channel_id, uses_limit, uses_count)
+        VALUES (?, ?, ?, 0)
+        ON CONFLICT(code) DO UPDATE SET
+            uses_limit = excluded.uses_limit,
+            channel_id = COALESCE(excluded.channel_id, promocodes.channel_id)
+        """,
+        (code, channel_id, uses_limit),
     )
     await db.commit()
 
@@ -696,10 +766,26 @@ async def reset_contest_with_archive(actor_id: int) -> dict[str, int | float]:
                 code,
                 channel_id,
                 used_by,
+                activated_at,
+                uses_limit,
+                uses_count
+            )
+            SELECT ?, id, code, channel_id, used_by, activated_at, uses_limit, uses_count
+            FROM promocodes
+            """,
+            (reset_id,),
+        )
+        await db.execute(
+            """
+            INSERT INTO contest_reset_promocode_activations (
+                reset_id,
+                original_id,
+                original_promocode_id,
+                user_id,
                 activated_at
             )
-            SELECT ?, id, code, channel_id, used_by, activated_at
-            FROM promocodes
+            SELECT ?, id, promocode_id, user_id, activated_at
+            FROM promocode_activations
             """,
             (reset_id,),
         )
@@ -725,6 +811,7 @@ async def reset_contest_with_archive(actor_id: int) -> dict[str, int | float]:
         await db.execute("DELETE FROM winners")
         await db.execute("DELETE FROM casino_spins")
         await db.execute("DELETE FROM channels")
+        await db.execute("DELETE FROM promocode_activations")
         await db.execute("DELETE FROM promocodes")
         await db.execute("DELETE FROM temporary_admins")
 

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import sys
 from pathlib import Path
 
@@ -81,12 +82,23 @@ PROMOCODES = [
 
 async def main() -> None:
     """Добавить все промокоды в БД."""
+    parser = argparse.ArgumentParser(description="Добавить промокоды в БД")
+    parser.add_argument(
+        "--uses-limit",
+        type=int,
+        default=1,
+        help="Сколько раз можно использовать каждый промокод",
+    )
+    args = parser.parse_args()
+    if args.uses_limit < 1:
+        raise SystemExit("--uses-limit должен быть >= 1")
+
     await init_db()
 
-    print(f"Добавление {len(PROMOCODES)} промокодов...")
+    print(f"Добавление {len(PROMOCODES)} промокодов (лимит: {args.uses_limit})...")
 
     for code in PROMOCODES:
-        await add_promocode(code)
+        await add_promocode(code, uses_limit=args.uses_limit)
         print(f"  ✅ {code}")
 
     await close_db()

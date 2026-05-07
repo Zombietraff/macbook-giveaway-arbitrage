@@ -98,7 +98,9 @@ async def main() -> None:
     print(f"  Заблокировали бота:      {blocked}")
 
     # Общие билеты
-    async with db.execute("SELECT SUM(tickets) FROM users WHERE tickets > 0") as cur:
+    async with db.execute(
+        "SELECT COALESCE(SUM(tickets), 0) FROM users WHERE tickets > 0 AND blocked_bot = FALSE"
+    ) as cur:
         total_tickets = (await cur.fetchone())[0] or 0
     print(f"  Всего билетов:           {total_tickets}")
 

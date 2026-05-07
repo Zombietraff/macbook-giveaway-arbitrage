@@ -64,7 +64,19 @@ CREATE TABLE IF NOT EXISTS promocodes (
     channel_id   INTEGER,
     used_by      INTEGER,
     activated_at TIMESTAMP,
+    uses_limit   INTEGER NOT NULL DEFAULT 1,
+    uses_count   INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(used_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS promocode_activations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    promocode_id INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(promocode_id, user_id),
+    FOREIGN KEY(promocode_id) REFERENCES promocodes(id),
+    FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS referrals (
@@ -124,7 +136,16 @@ class TestDatabaseSchema(unittest.TestCase):
                 ) as cursor:
                     tables = [row[0] for row in await cursor.fetchall()]
 
-                expected = ["channels", "contest_prizes", "promocodes", "referrals", "settings", "users", "winners"]
+                expected = [
+                    "channels",
+                    "contest_prizes",
+                    "promocode_activations",
+                    "promocodes",
+                    "referrals",
+                    "settings",
+                    "users",
+                    "winners",
+                ]
                 self.assertEqual(tables, expected)
 
         asyncio.run(_run())

@@ -21,6 +21,7 @@ from config import BOT_TOKEN
 from db.database import close_db, init_db
 from middlewares.contest_active import ContestActiveMiddleware
 from middlewares.localization import LocalizationMiddleware
+from middlewares.subscription import SubscriptionMiddleware
 
 # ──────────────────── Импорт роутеров ────────────────────
 from handlers import (
@@ -114,6 +115,8 @@ async def main() -> NoReturn:
     # Регистрация middleware
     dp.message.middleware(LocalizationMiddleware())
     dp.callback_query.middleware(LocalizationMiddleware())
+    dp.message.middleware(SubscriptionMiddleware())
+    dp.callback_query.middleware(SubscriptionMiddleware())
     dp.message.middleware(ContestActiveMiddleware())
 
     _register_routers(dp)

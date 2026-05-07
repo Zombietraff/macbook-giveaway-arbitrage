@@ -36,14 +36,27 @@ Required subscription channels.
 
 ## promocodes
 
-One-time global promo codes.
+Promo codes with a global usage limit.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | `INTEGER PRIMARY KEY AUTOINCREMENT` | Internal ID |
 | `code` | `TEXT UNIQUE` | Promo code |
 | `channel_id` | `INTEGER` | Optional channel binding |
-| `used_by` | `INTEGER` | User who activated it, FK to `users.id` |
+| `used_by` | `INTEGER` | Legacy one-time activation user |
+| `activated_at` | `TIMESTAMP` | Legacy one-time activation time |
+| `uses_limit` | `INTEGER` | Maximum total activations |
+| `uses_count` | `INTEGER` | Current activation count |
+
+## promocode_activations
+
+Per-user promo code activation history. Enforces one activation per user per code.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `INTEGER PRIMARY KEY AUTOINCREMENT` | Internal ID |
+| `promocode_id` | `INTEGER` | FK to `promocodes.id` |
+| `user_id` | `INTEGER` | FK to `users.id` |
 | `activated_at` | `TIMESTAMP` | Activation time |
 
 ## referrals
@@ -231,6 +244,7 @@ Full snapshots created before owner reset clears current contest state.
 | `contest_reset_casino_spins` | All rows from `casino_spins` |
 | `contest_reset_channels` | All rows from `channels` |
 | `contest_reset_promocodes` | All rows from `promocodes` |
+| `contest_reset_promocode_activations` | All rows from `promocode_activations` |
 | `contest_reset_user_trust_scores` | All rows from `user_trust_scores` |
 | `contest_reset_temporary_admins` | All rows from `temporary_admins` |
 

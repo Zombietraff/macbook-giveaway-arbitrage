@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
-from db.models import activate_promocode, add_user_tickets, get_promocode, get_user
+from db.models import activate_promocode, add_user_tickets, get_user
 from keyboards.main_menu import get_active_main_menu_keyboard, get_cancel_keyboard
 from utils.checks import check_subscription
 
@@ -85,18 +85,7 @@ async def process_promo_code(
 
     logger.info("User %d вводит промокод: '%s'", user_id, code)
 
-    # 1. Проверяем код в БД
-    promo = await get_promocode(code)
-    if not promo or promo["used_by"] is not None:
-        await message.answer(i18n("promo_invalid"))
-        await state.clear()
-        await message.answer(
-            i18n("menu_back"),
-            reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
-        )
-        return
-
-    # 2. Проверяем подписку пользователя
+    # 1. Проверяем подписку пользователя
     try:
         all_subscribed, _ = await check_subscription(bot, user_id)
     except Exception as e:
@@ -114,8 +103,22 @@ async def process_promo_code(
         )
         return
 
-    # 3. Активируем промокод
-    await activate_promocode(code, user_id)
+    # 2. Активируем промокод
+    activation_status = await activate_promocode(code, user_id)
+    if activation_status != "activated":
+        status_text_key = {
+            "not_found": "promo_not_found",
+            "already_used_by_user": "promo_already_used_by_user",
+            "exhausted": "promo_exhausted",
+        }.get(activation_status, "promo_invalid")
+        await message.answer(i18n(status_text_key))
+        await state.clear()
+        await message.answer(
+            i18n("menu_back"),
+            reply_markup=await get_active_main_menu_keyboard(lang, user_id=user_id),
+        )
+        return
+
     await add_user_tickets(user_id, 5.0)
 
     # Получаем обновлённый баланс
