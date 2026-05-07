@@ -1132,12 +1132,18 @@ async def admin_stats(message: Message, **kwargs: Any) -> None:
 
     async with db.execute("SELECT COUNT(*) FROM users") as cur:
         total_users = (await cur.fetchone())[0]
-    async with db.execute("SELECT COUNT(*) FROM users WHERE tickets > 0 AND blocked_bot = FALSE") as cur:
-        active_users = (await cur.fetchone())[0]
+    async with db.execute("SELECT COUNT(*) FROM users WHERE tickets > 0") as cur:
+        users_with_tickets = (await cur.fetchone())[0]
+    async with db.execute(
+        "SELECT COUNT(*) FROM users WHERE tickets > 0 AND blocked_bot = FALSE"
+    ) as cur:
+        draw_users = (await cur.fetchone())[0]
+    async with db.execute("SELECT COALESCE(SUM(tickets), 0) FROM users") as cur:
+        total_tickets = (await cur.fetchone())[0] or 0
     async with db.execute(
         "SELECT COALESCE(SUM(tickets), 0) FROM users WHERE tickets > 0 AND blocked_bot = FALSE"
     ) as cur:
-        total_tickets = (await cur.fetchone())[0] or 0
+        draw_tickets = (await cur.fetchone())[0] or 0
     async with db.execute("SELECT COUNT(*) FROM referrals WHERE status='completed'") as cur:
         total_referrals = (await cur.fetchone())[0]
     async with db.execute("SELECT COALESCE(SUM(uses_count), 0) FROM promocodes") as cur:
@@ -1153,8 +1159,10 @@ async def admin_stats(message: Message, **kwargs: Any) -> None:
     text = (
         "📊 <b>Статистика конкурса</b>\n\n"
         f"👥 Всего пользователей: <b>{total_users}</b>\n"
-        f"✅ Активных участников: <b>{active_users}</b>\n"
-        f"🎫 Всего билетов: <b>{_fmt_amount(float(total_tickets))}</b>\n"
+        f"✅ Участников с билетами: <b>{users_with_tickets}</b>\n"
+        f"🎯 Допущены к draw: <b>{draw_users}</b>\n"
+        f"🎫 Всего билетов в БД: <b>{_fmt_amount(float(total_tickets))}</b>\n"
+        f"🎟 Билетов для draw: <b>{_fmt_amount(float(draw_tickets))}</b>\n"
         f"👥 Рефералов (completed): <b>{total_referrals}</b>\n"
         f"🥚 Промокодов использовано: <b>{used_promos}</b>\n"
         f"🔒 Промокодов исчерпано: <b>{exhausted_promos}</b>\n"

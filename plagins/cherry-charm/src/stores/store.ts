@@ -3,7 +3,7 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import { Fruit } from '../utils/enums';
 import { LanguageCode } from '../i18n';
 
-const STAKE_TIERS = [1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 500];
+const STAKE_TIERS = [1, 2, 3, 4, 5, 10];
 const MIN_REMAINING_TICKETS = 1;
 
 type State = {
@@ -65,7 +65,7 @@ const useGame = create<State>()(
      * Coins: Just updates the value.
      * Snap-down logic removed from here to prevent bet resetting mid-spin.
      */
-    coins: 1000,
+    coins: 0,
     setCoins: (amount: number) => set(() => ({ coins: amount })),
     updateCoins: (amount: number) => {
       set((state) => ({ coins: state.coins + amount }));

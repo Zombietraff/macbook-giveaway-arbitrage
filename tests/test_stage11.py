@@ -222,6 +222,94 @@ class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("BAR", SYMBOL_MAP)
         self.assertEqual(set(SYMBOL_MAP), {"CHERRY", "APPLE", "BANANA", "LEMON"})
 
+    async def test_webapp_spin_uses_per_reel_symbol_weights(self) -> None:
+        """WebApp spin chances mirror the visible 16-stop reels."""
+        from api.routes import REEL_SYMBOL_WEIGHTS, generate_spin_result
+
+        self.assertEqual(
+            REEL_SYMBOL_WEIGHTS,
+            (
+                {"CHERRY": 1, "APPLE": 1, "BANANA": 4, "LEMON": 10},
+                {"CHERRY": 1, "APPLE": 4, "BANANA": 1, "LEMON": 10},
+                {"CHERRY": 1, "APPLE": 5, "BANANA": 9, "LEMON": 1},
+            ),
+        )
+
+        choices_calls = []
+
+        def fake_choices(symbols, weights, k):
+            choices_calls.append((tuple(symbols), tuple(weights), k))
+            return [symbols[0]]
+
+        with patch("api.routes.random.choices", side_effect=fake_choices):
+            self.assertEqual(generate_spin_result(), ["CHERRY", "CHERRY", "CHERRY"])
+
+        self.assertEqual(
+            choices_calls,
+            [
+                (("CHERRY", "APPLE", "BANANA", "LEMON"), (1, 1, 4, 10), 1),
+                (("CHERRY", "APPLE", "BANANA", "LEMON"), (1, 4, 1, 10), 1),
+                (("CHERRY", "APPLE", "BANANA", "LEMON"), (1, 5, 9, 1), 1),
+            ],
+        )
+
+    async def test_webapp_frontend_reel_maps_match_backend_weights(self) -> None:
+        """Frontend logical reel maps must stay in sync with backend weights."""
+        import re
+        from collections import Counter
+
+        from api.routes import REEL_SYMBOL_WEIGHTS
+
+        reel_maps_path = (
+            Path(__file__).resolve().parent.parent
+            / "plagins/cherry-charm/src/utils/reelMaps.ts"
+        )
+        reel_maps_text = reel_maps_path.read_text(encoding="utf-8")
+
+        for reel_index, expected_weights in enumerate(REEL_SYMBOL_WEIGHTS):
+            match = re.search(
+                rf"  {reel_index}: \[\n(?P<body>.*?)\n  \]",
+                reel_maps_text,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(match, f"reel {reel_index} not found")
+
+            symbols = [
+                symbol.upper()
+                for symbol in re.findall(
+                    r"Fruit\.(cherry|apple|banana|lemon)",
+                    match.group("body"),
+                )
+            ]
+
+            self.assertEqual(len(symbols), sum(expected_weights.values()))
+            self.assertEqual(dict(Counter(symbols)), expected_weights)
+
+    async def test_webapp_spin_probability_profile_limits_expected_return(self) -> None:
+        """Strict anti-match weights keep RTP near 65% with current paytable."""
+        from itertools import product
+
+        from api.routes import REEL_SYMBOL_WEIGHTS, calculate_spin_payout
+
+        expected_payout = 0.0
+        win_rate = 0.0
+
+        reel_totals = [sum(reel_weights.values()) for reel_weights in REEL_SYMBOL_WEIGHTS]
+        for symbols in product(*[tuple(reel_weights) for reel_weights in REEL_SYMBOL_WEIGHTS]):
+            probability = 1.0
+            for reel_index, symbol in enumerate(symbols):
+                probability *= (
+                    REEL_SYMBOL_WEIGHTS[reel_index][symbol] / reel_totals[reel_index]
+                )
+
+            payout = calculate_spin_payout(list(symbols))
+            expected_payout += probability * payout
+            if payout > 0:
+                win_rate += probability
+
+        self.assertAlmostEqual(expected_payout, 0.65185546875)
+        self.assertAlmostEqual(win_rate, 0.0595703125)
+
     async def test_webapp_spin_balance_2_bet_2_is_rejected(self) -> None:
         """WebApp spin отклоняет ставку, которая оставила бы 0 билетов."""
         from api.routes import spin_slot

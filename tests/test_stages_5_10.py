@@ -732,8 +732,8 @@ class TestAdminFunctions(unittest.TestCase):
         with self.assertRaises(ValueError):
             _parse_add_promocodes_payload("0 CODE1")
 
-    def test_admin_stats_counts_only_active_contest_tickets(self) -> None:
-        """Статистика билетов конкурса не включает blocked/nonpositive и не обрезает дроби."""
+    def test_admin_stats_shows_db_and_draw_ticket_totals(self) -> None:
+        """Статистика показывает сумму билетов в БД отдельно от draw-фильтра."""
         async def _run() -> None:
             tmp_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
             db_path = tmp_file.name
@@ -774,8 +774,10 @@ class TestAdminFunctions(unittest.TestCase):
                     await admin_stats(message)
 
                 text = message.answer.call_args.args[0]
-                self.assertIn("✅ Активных участников: <b>2</b>", text)
-                self.assertIn("🎫 Всего билетов: <b>3.5</b>", text)
+                self.assertIn("✅ Участников с билетами: <b>3</b>", text)
+                self.assertIn("🎯 Допущены к draw: <b>2</b>", text)
+                self.assertIn("🎫 Всего билетов в БД: <b>10.5</b>", text)
+                self.assertIn("🎟 Билетов для draw: <b>3.5</b>", text)
             finally:
                 await conn.close()
                 database_mod._connection = None

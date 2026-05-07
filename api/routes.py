@@ -64,20 +64,30 @@ def webapp_auth(func):
         return await func(request)
     return wrapper
 
-# Let's map emojis to React frontend strings
+# Public symbol pool used by tests and the WebApp client contract.
 SYMBOL_MAP = {
-    "CHERRY": 0.25,
-    "APPLE": 0.25,
-    "BANANA": 0.25,
-    "LEMON": 0.25,
+    "CHERRY": 1.0,
+    "APPLE": 1.0,
+    "BANANA": 1.0,
+    "LEMON": 1.0,
 }
 
+# Match the visible 16-stop reel textures in plagins/cherry-charm/src/utils/reelMaps.ts.
+REEL_SYMBOL_WEIGHTS = (
+    {"CHERRY": 1, "APPLE": 1, "BANANA": 4, "LEMON": 10},
+    {"CHERRY": 1, "APPLE": 4, "BANANA": 1, "LEMON": 10},
+    {"CHERRY": 1, "APPLE": 5, "BANANA": 9, "LEMON": 1},
+)
+
 def generate_spin_result() -> list[str]:
-    # Randomly select 3 symbols
-    # A realistic slot machine might use reels, but we can do a simple weighted random here for the demo.
-    symbols = list(SYMBOL_MAP.keys())
-    weights = list(SYMBOL_MAP.values())
-    return random.choices(symbols, weights=weights, k=3)
+    return [
+        random.choices(
+            list(reel_weights.keys()),
+            weights=list(reel_weights.values()),
+            k=1,
+        )[0]
+        for reel_weights in REEL_SYMBOL_WEIGHTS
+    ]
 
 def calculate_spin_payout(symbols: list[str]) -> int:
     """Return base paytable payout. Pair payouts only use the first two reels."""

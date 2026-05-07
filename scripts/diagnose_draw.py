@@ -97,12 +97,17 @@ async def main() -> None:
         blocked = (await cur.fetchone())[0]
     print(f"  Заблокировали бота:      {blocked}")
 
-    # Общие билеты
+    # Билеты в БД
+    async with db.execute("SELECT COALESCE(SUM(tickets), 0) FROM users") as cur:
+        total_tickets = (await cur.fetchone())[0] or 0
+    print(f"  Всего билетов в БД:     {total_tickets}")
+
+    # Билеты, которые участвуют в draw
     async with db.execute(
         "SELECT COALESCE(SUM(tickets), 0) FROM users WHERE tickets > 0 AND blocked_bot = FALSE"
     ) as cur:
-        total_tickets = (await cur.fetchone())[0] or 0
-    print(f"  Всего билетов:           {total_tickets}")
+        draw_tickets = (await cur.fetchone())[0] or 0
+    print(f"  Билетов для draw:        {draw_tickets}")
 
     from db.models import get_contest_prizes, get_draw_prize_list
 
