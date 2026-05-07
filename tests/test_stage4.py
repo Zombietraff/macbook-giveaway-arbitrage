@@ -397,7 +397,6 @@ class TestSubscriptionMiddleware(unittest.IsolatedAsyncioTestCase):
 
         with patch("middlewares.subscription.check_subscription", new=check_mock):
             for event in (
-                self._message(user, "/start ref_abc"),
                 self._message(user, "🌐 Язык"),
                 self._callback(user, "check_subscription"),
                 self._callback(user, "lang_ru"),
@@ -407,7 +406,48 @@ class TestSubscriptionMiddleware(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result, "ok")
 
         check_mock.assert_not_awaited()
-        self.assertEqual(handler.await_count, 5)
+        self.assertEqual(handler.await_count, 4)
+
+    async def test_start_is_checked_for_registered_users(self) -> None:
+        from middlewares.subscription import SubscriptionMiddleware
+
+        user = await self._create_user()
+        handler = AsyncMock()
+        unsubscribed = [
+            {"channel_id": "-100222", "title": "Missing", "invite_link": "https://t.me/missing"},
+        ]
+
+        with (
+            patch("middlewares.subscription.check_subscription", new=AsyncMock(return_value=(False, unsubscribed))),
+            patch.object(Message, "answer", new=AsyncMock()) as answer_mock,
+        ):
+            result = await SubscriptionMiddleware()(
+                handler,
+                self._message(user, "/start ref_abc"),
+                self._data(user),
+            )
+
+        self.assertIsNone(result)
+        handler.assert_not_awaited()
+        answer_mock.assert_awaited_once()
+
+    async def test_start_passes_for_new_users(self) -> None:
+        from middlewares.subscription import SubscriptionMiddleware
+
+        user = User(id=3999, is_bot=False, first_name="New")
+        handler = AsyncMock(return_value="ok")
+        check_mock = AsyncMock(return_value=(False, [{"channel_id": "-100222"}]))
+
+        with patch("middlewares.subscription.check_subscription", new=check_mock):
+            result = await SubscriptionMiddleware()(
+                handler,
+                self._message(user, "/start ref_abc"),
+                self._data(user),
+            )
+
+        self.assertEqual(result, "ok")
+        handler.assert_awaited_once()
+        check_mock.assert_not_awaited()
 
     async def test_admin_skips_subscription_check(self) -> None:
         from middlewares.subscription import SubscriptionMiddleware

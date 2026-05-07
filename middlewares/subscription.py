@@ -22,7 +22,6 @@ from utils.checks import check_subscription
 logger = logging.getLogger(__name__)
 
 _ALLOWED_MESSAGE_TEXTS = frozenset({
-    "/start",
     "🌐 Язык",
     "🌐 Мова",
 })
@@ -44,7 +43,7 @@ def _is_allowed_message(message: Message) -> bool:
     text = (message.text or "").strip()
     if not text:
         return False
-    return text in _ALLOWED_MESSAGE_TEXTS or _message_command(text) == "/start"
+    return text in _ALLOWED_MESSAGE_TEXTS
 
 
 def _is_allowed_callback(callback: CallbackQuery) -> bool:
@@ -81,8 +80,8 @@ class SubscriptionMiddleware(BaseMiddleware):
     """
     Middleware: проверяет подписки на каждом пользовательском действии.
 
-    Исключения: незарегистрированные пользователи, админы, /start,
-    смена языка и ручная кнопка проверки подписки.
+    Исключения: незарегистрированные пользователи, админы, смена языка
+    и ручная кнопка проверки подписки.
     """
 
     async def __call__(
