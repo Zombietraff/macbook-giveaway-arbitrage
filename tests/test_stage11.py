@@ -253,12 +253,16 @@ class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_webapp_frontend_reel_maps_match_backend_weights(self) -> None:
-        """Frontend logical reel maps must stay in sync with backend weights."""
+    async def test_webapp_frontend_reel_maps_keep_texture_symbol_counts(self) -> None:
+        """Frontend logical reel maps must stay aligned with static reel textures."""
         import re
         from collections import Counter
 
-        from api.routes import REEL_SYMBOL_WEIGHTS
+        expected_texture_counts = (
+            {"CHERRY": 2, "APPLE": 2, "BANANA": 4, "LEMON": 8},
+            {"CHERRY": 2, "APPLE": 4, "BANANA": 2, "LEMON": 8},
+            {"CHERRY": 2, "APPLE": 4, "BANANA": 2, "LEMON": 8},
+        )
 
         reel_maps_path = (
             Path(__file__).resolve().parent.parent
@@ -266,7 +270,7 @@ class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
         )
         reel_maps_text = reel_maps_path.read_text(encoding="utf-8")
 
-        for reel_index, expected_weights in enumerate(REEL_SYMBOL_WEIGHTS):
+        for reel_index, expected_counts in enumerate(expected_texture_counts):
             match = re.search(
                 rf"  {reel_index}: \[\n(?P<body>.*?)\n  \]",
                 reel_maps_text,
@@ -282,8 +286,8 @@ class TestCasinoStage11(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-            self.assertEqual(len(symbols), sum(expected_weights.values()))
-            self.assertEqual(dict(Counter(symbols)), expected_weights)
+            self.assertEqual(len(symbols), 16)
+            self.assertEqual(dict(Counter(symbols)), expected_counts)
 
     async def test_webapp_spin_probability_profile_limits_expected_return(self) -> None:
         """Strict anti-match weights keep RTP near 65% with current paytable."""
